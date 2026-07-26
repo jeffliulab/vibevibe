@@ -1,0 +1,290 @@
+# vibevibe 配置模板
+#
+# 用法:复制到 ~/.config/vibevibe/config.toml 再改。
+#   mkdir -p ~/.config/vibevibe
+#   cp config/config.example.toml ~/.config/vibevibe/config.toml
+#
+# 这里列的都是默认值。写错的键名会让程序**启动失败并报错**,
+# 而不是被静默忽略——静默忽略会让人以为改的配置生效了,那种坑最难查。
+
+[ui]
+# 界面和日志的语言:zh | en
+# 托盘 →「设置…」→「常规」里也能改,改完立即生效。
+# 只影响用户看得见的东西(日志、菜单、设置界面、命令行输出);
+# 代码注释一律保持中文,那是给维护者看的。
+language = "zh"
+
+
+[asr]
+# 用哪个后端:
+#   qwen_onnx_1p7b  Qwen3-ASR-1.7B(默认,实测最准)
+#   qwen_onnx       Qwen3-ASR-0.6B(快约两倍,准确率掉一档)
+#   whisper_ct2     Whisper large-v3-turbo(对照基线,各项都落后)
+#   qwen_hf         官方 PyTorch 路径(需另装 torch,默认没装)
+#
+# 选 1.7B 是实测结果,不是"越大越好":
+#   技术词命中 77% vs 0.6B 的 70%
+#   CER 0.082 vs 0.132
+#   英文 WER 0.213 vs 0.309
+#   代价:RTF 0.15 vs 0.08(八秒的话 1.2 秒出字,依然远快于实时)
+backend = "qwen_onnx_1p7b"
+
+# 语言。**中英混说必须留空**。
+# 留空 = 让模型自动检测;填了具体语言会把它钉死在一种语言上,混说就废了。
+language = ""
+
+# 单段最多生成多少 token。也是无限重复 bug 的第一道闸。
+max_new_tokens = 512
+
+# 超过 45 秒的音频会按静音点自动切分,这是每段的目标长度(秒)。
+chunk_sec = 30
+
+
+[asr.qwen_onnx_1p7b]
+# 1.7B。跟 0.6B 走同一套代码——它的结构差异(单文件 encoder、
+# 预填充吃 input_ids、隐藏维 2048、词嵌入 float16)全部在加载时自省,
+# 不需要在这里配。
+model_dir = "models/Qwen3-ASR-1.7B-ONNX"
+quantize = "int4"          # 这个导出只提供 fp32 和 int4,没有 int8
+intra_op_num_threads = 4
+inter_op_num_threads = 1
+mmap_embeddings = true
+
+
+[asr.qwen_onnx]
+model_dir = "models/Qwen3-ASR-0.6B-ONNX-CPU"
+
+# 解码器量化档。0.6B 的导出有 int8;1.7B 的社区导出只有 fp32 和 int4。
+# "none" 表示用不带后缀的 FP32 版本。
+quantize = "int8"
+
+# 单个算子内部的并行线程数。0 = 交给 onnxruntime 用满所有核。
+# **这是控制 CPU 占用的主要旋钮**:这台机器 16 线程,给 4 就只占约 1/4,
+# 代价是单次转写慢一些。跑训练/编译的时候想让路,就调小它。
+intra_op_num_threads = 4
+
+# 算子之间的并行度。CPU 上这条流水线基本是串行的,给 1 即可。
+inter_op_num_threads = 1
+
+# 词嵌入矩阵(622MB)用 mmap 打开而不是整个读进内存。
+# 每次只按 token id 取几行,所以 mmap 几乎不影响速度,但省 622MB 常驻。
+mmap_embeddings = true
+
+
+[asr.whisper_ct2]
+model_dir = "models/faster-whisper-large-v3-turbo-int8-ct2"
+compute_type = "int8"
+cpu_threads = 4
+num_workers = 1
+beam_size = 1
+vad_filter = true
+
+
+[asr.qwen_hf]
+# 这个后端需要 PyTorch(约 2.5GB),默认没装,跑起来会提示怎么装。
+# 只在做 1.7B 准确率对照时才用得上。
+model_id = "Qwen/Qwen3-ASR-1.7B"
+model_dir = ""
+device = "cpu"
+dtype = "float32"
+
+
+[audio]
+# 输入设备。留空 = 系统默认。可填索引("3")或设备名的子串("C920")。
+# 跑 `vibevibe devices --audio` 看有哪些。
+# 注意:这台机器上 C920 是摄像头上的远场麦,识别率大概率不如一个近场麦。
+input_device = ""
+
+sample_rate = 16000
+channels = 1
+
+# 录音硬上限(秒),防止忘记停止把内存吃光。
+max_record_sec = 120.0
+
+# 录音块大小(秒)。影响松手到停止的响应速度,不用改。
+block_sec = 0.05
+
+# 短于这个时长的录音直接丢弃,当作误触。
+min_record_sec = 0.3
+
+# —— 下面三个是静音自动停止,**当前版本还没接上**(计划在稳健性阶段做)。
+# 留在这里是为了配置结构稳定,现在改它们不会有任何效果。
+silence_auto_stop = false
+silence_threshold_db = -40.0
+silence_duration_sec = 2.0
+
+
+[preprocess_audio]
+# 录音预处理。针对"输入增益过高导致削顶"这个真实工况。
+#
+# 这台机器实测:C920 摄像头麦 + ALSA 采集增益拉满(+44dB),
+# 录音里 0.2%~2.2% 的样本被削平到 ±1.0。削顶的危害是**谐波失真**
+# ——波形顶被削平等于凭空多出一堆高频谐波,而 mel 频谱对高频敏感。
+#
+# 削顶重建的效果是**实测过的**(受控实验:拿录音里未削顶的干净片段
+# 当基准真值,人为削顶再重建):
+#   削顶率 0.79% → 信噪比改善 +1.7dB,10 条里 0 条变差
+#   削顶率 2.49% → 改善 +2.5dB
+#   削顶率 5.50% → 改善 +2.8dB
+#
+# ⚠️ A/B 跑分的结论:**这东西的收益是模型特异的,而且对现在选定的
+# 1.7B 没有好处,甚至略有害**,所以保持关闭。实测:
+#   0.6B:  技术词 67%→70%,英文 WER 0.774→0.309  (有明显帮助)
+#   1.7B:  技术词 77%→77%,CER 0.082→0.086,WER 0.213→0.243  (略微变差)
+#   Whisper: 技术词 60%→60%,WER 0.503→0.526      (略微变差)
+# 说明模型本身够强的时候,削顶带来的失真它自己就扛住了,
+# 再去"修"反而是画蛇添足。换模型或换麦克风后值得重新 A/B 一次。
+enabled = false
+
+# 削顶重建:用两侧波形插值补回被削平的波峰
+declip = true
+clip_threshold = 0.99
+
+# 这两个值是扫参数扫出来的,不是拍脑袋:
+# context=8 / overshoot=2.0 平均改善 +2.77dB,最差的一条也有 +0.81dB。
+# 锚点取太多(20~32)反而变差——拟合窗口一宽就抓不住局部峰形。
+declip_context = 8
+declip_max_overshoot = 2.0
+declip_max_run = 64
+
+# 归一化。削顶重建后峰值会超过 1.0,必须缩回来,否则又被削一次。
+normalize = true
+target_peak = 0.85
+target_rms = 0.0
+
+# 高通滤波。实测这批录音 80Hz 以下只占 0.7%~1.8% 能量,所以关着。
+# 换麦克风或换环境后可能用得上。
+highpass_hz = 0.0
+
+
+[guard]
+# 兜底闸。挡住 Qwen3-ASR 已知的无限重复 token bug(官方 issue #129 未修)。
+# 原则:宁可什么都不输出,也不要把一屏乱码粘进你正在写的东西里。
+
+# 末尾 n 个 token 组成的片段连续重复 repeat_max_times 次 → 判定跑飞,停止解码
+repeat_ngram_size = 8
+repeat_max_times = 3
+
+# 单个 token 连续重复这么多次 → 判定卡死
+single_token_repeat_max = 24
+
+# 整段转写超时(秒)。超了就放弃并报错,不交出半成品。
+transcribe_timeout_sec = 60.0
+
+# 结果短于这个长度当作没识别到;长于 max 说明模型跑飞了。
+min_text_len = 1
+max_text_len = 4000
+
+
+[sound]
+# 提示音。为什么用声音而不是桌面通知:听写时眼睛盯着输入框,
+# 不会去看屏幕顶部——声音不需要你移开视线,也不遮挡任何东西。
+enabled = true
+
+# 0~1。默认小声,是"提示"不是"打扰"。嫌吵调小,听不见调大。
+volume = 0.18
+
+# 留空 = 系统默认输出设备
+output_device = ""
+
+# 每个音给多个频率 = 和弦,比单音饱满、不刺耳。
+# 按下去了,正在录 —— 高一点,清脆
+start_freqs = [880.0, 1320.0]
+start_sec = 0.075
+
+# 出字了,已经粘好 —— 低一点,有收尾感
+done_freqs = [660.0, 880.0]
+done_sec = 0.075
+
+# 出问题了,一个字都没粘(闸门拦下 / 录音过短 / 注入失败)
+# —— 明显不同的低音,一听就知道不对劲
+error_freqs = [220.0, 233.0]
+error_sec = 0.28
+
+
+[inject]
+# clipboard_paste:填剪贴板再模拟 Ctrl+V(推荐,中英混排最可靠)
+# type:用 xdotool 逐字敲(中文不可靠,仅备选)
+method = "clipboard_paste"
+paste_key = "ctrl+v"
+
+# 粘贴后把你原来的剪贴板内容还回去
+restore_clipboard = true
+restore_delay_sec = 0.5
+
+clipboard_tool = "xclip"
+type_tool = "xdotool"
+type_delay_ms = 12
+
+
+[hotkey]
+# F19 通道(专用小键盘)。需要 udev 规则给权限,见 config/70-vibevibe.rules.example。
+# 组合键通道不需要开这个——那条走 GNOME 快捷键 → `vibevibe toggle`。
+enabled = false
+
+# **必须**填 /dev/input/by-id/ 下的稳定路径。
+# /dev/input/eventN 的编号重新插拔后会变,写死它迟早指错设备。
+# 跑 `vibevibe devices --input` 看有哪些。
+device = ""
+
+# evdev 的按键名。F19 在 X11 默认布局下没有 keysym(keycode 197 是空的),
+# 正因为如此它不会跟任何东西冲突,但也只能靠这条 evdev 直读的路来用。
+key = "KEY_F19"
+
+# hold:按住录、松开转写(专用键推荐,手感像对讲机)
+# toggle:按一下开始、再按一下停
+mode = "hold"
+
+# 独占设备(EVIOCGRAB)。独占后按键完全不会漏进当前窗口。
+# **只能对专用小键盘开**。独占是整个设备的,对主键盘开会吃掉你所有输入。
+grab = false
+
+# 安全闸:开 grab 时,设备按键数超过这个值就拒绝独占。
+# 防止配置写错把主键盘吞了。
+grab_max_keys = 8
+
+reconnect_interval_sec = 2.0
+
+
+[daemon]
+socket_path = "~/.local/state/vibevibe/vibevibe.sock"
+log_path = "~/.local/state/vibevibe/vibevibe.log"
+log_level = "INFO"
+
+# ── 内存策略(托盘图标里的两个开关就是这两项)─────────────────────
+#
+# 热加载:模型是不是一直待在内存里。
+#
+#   true (默认) —— 启动就加载、永不卸载。按键立刻出字,
+#                   代价是常驻约 3.8GB
+#   false       —— 用的时候才加载,用完 idle_unload_sec 秒后放掉。
+#                   内存降到约 0.24GB,代价是冷启动多等 1.7~2.5 秒
+#
+# 为什么这 3.8GB 是真占着的(实测,不是估算):
+#   ONNX Runtime 把权重**复制进匿名内存**而不是 mmap,内核回收不了。
+#   而且光在 Python 层删掉模型对象也没用 —— glibc 会把 free 掉的内存
+#   扣在自己的 arena 里,操作系统看到的常驻内存纹丝不动:
+#       只 del + gc      3306 MB   ← 看着像没卸载
+#       再 malloc_trim    306 MB   ← 才是真还回去了
+#   所以卸载路径里额外调了 malloc_trim(0)。
+hot_reload = true
+
+# 热加载关闭时,用完多久把模型放掉。
+# 太短会导致连续口述时反复加载,太长又失去省内存的意义。
+idle_unload_sec = 20.0
+
+
+[postprocess]
+strip_surrounding_space = true
+
+# 去掉中文句末的句号(口述时通常不想要)。问号感叹号不受影响。
+strip_trailing_period = false
+
+# 技术词纠正表。模型偶尔会把中文里嵌的英文词音译成中文,在这里修回去。
+# 例:
+#   replacements = [
+#     { from = "康米特", to = "commit" },
+#     { from = "派普莱恩", to = "pipeline" },
+#   ]
+# 等实测跑完看到具体错在哪些词上再填,现在留空。
+replacements = []

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=vibevibe
+Comment=本地中英混说语音听写 —— 托盘开关
+# @EXEC@ 由 `vibevibe setup` 替换成这台机器上的真实路径
+Exec=@EXEC@
+Icon=@ICON@
+Terminal=false
+Categories=Utility;AudioVideo;
+# 托盘等桌面起来了再启动,否则可能挂不上去
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5

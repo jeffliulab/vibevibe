@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# 模型权重,几个 G,不进仓库
+models/
+
+# 录音语料和跑分结果:录音是本人声音,不该进公开仓库
+bench/data/
+bench/results/
+
+# 第三方参考实现(Qwen3-ASR 官方那份 ONNX 推理代码)。
+# Apache-2.0 允许再分发,但没必要把别人 530 行代码原样塞进自己仓库 ——
+# README 里有出处链接,需要的人一条 curl 就能取。本地留着方便查。
+docs/reference/

@@ -1,0 +1,97 @@
+# 测试语料清单
+#
+# 前 10 条全部是**中英文夹杂**,照你实际在干的活儿写的:机器人仿真、
+# 强化学习训练、日常开发、跟 agent 打交道、这个项目本身。
+# 最后 2 条是可跳过的基线,作用见文件末尾的说明。
+#
+# 每条:
+#   id     文件名用
+#   text   要念的内容(照着念,但不用一字不差,自然点更有代表性)
+#   terms  这句里必须被识别成**英文**的词。这是最关键的指标——
+#          模型把 "commit" 听成 "康米特" 就算错,即使整句读起来还通顺
+#   note   这条在测什么
+#
+# 念的时候按平时说话的语速和口气,别刻意念稿——
+# 刻意念出来的识别率会虚高,天天用起来就会翻车。
+
+# ── 十条中英夹杂 ────────────────────────────────────────────────────
+
+[[item]]
+id = "mix_git"
+text = "我刚才把这个改动 commit 了，但是还没有 push 到 remote 分支上"
+terms = ["commit", "push", "remote"]
+note = "最常见的开发词。短句,基准难度"
+
+[[item]]
+id = "mix_sim2sim"
+text = "这个 policy 在 Isaac Lab 里训得挺好，但是 sim to sim 迁到 MuJoCo 就直接摔了"
+terms = ["policy", "Isaac Lab", "MuJoCo"]
+note = "产品名 + 专有名词。MuJoCo 这种拼读不规则的词最容易被音译"
+
+[[item]]
+id = "mix_urdf"
+text = "URDF 里的关节 limit 写错了，导致 CAN 总线上报的角度跟仿真对不上"
+terms = ["URDF", "limit", "CAN"]
+note = "全大写缩写。缩写是 ASR 的老大难,容易被拆成单个字母或音译"
+
+[[item]]
+id = "mix_bench"
+text = "先跑一下 baseline，看 RTF 是多少，能压到零点三以内就够用了"
+terms = ["baseline", "RTF"]
+note = "缩写 + 数字混排"
+
+[[item]]
+id = "mix_config"
+text = "帮我把 config 里的 intra op num threads 调成四，然后重启 daemon"
+terms = ["config", "daemon"]
+note = "口述配置项名。连读的英文短语最考验模型"
+
+[[item]]
+id = "mix_agent"
+text = "我让 Claude Code 帮我 refactor 这个模块，结果它把 context 吃满了"
+terms = ["Claude Code", "refactor", "context"]
+note = "你每天都在说的话。产品名 + 动词 + 术语"
+
+[[item]]
+id = "mix_onnx"
+text = "这个模型导出成 ONNX 之后跑在 CPU 上，int8 量化能省一半内存"
+terms = ["ONNX", "CPU", "int8"]
+note = "本项目自身的术语。int8 这种字母加数字的写法特别容易错"
+
+[[item]]
+id = "mix_casual"
+text = "嗯……那个，我们是不是应该先做一个 MVP 出来，先自己用着，然后再考虑要不要做成产品"
+terms = ["MVP"]
+note = "带口头禅和停顿的自然口语。真实说话就长这样,别把「嗯」和停顿省掉"
+
+[[item]]
+id = "mix_path"
+text = "文件在 home 下面的 vibevibe 目录里，直接跑 pip install dash e 就行"
+terms = ["home", "pip install"]
+note = "口述路径和命令。这类内容最需要免打字,也最容易错"
+
+[[item]]
+id = "mix_long"
+text = "这个项目分两步走，第一步是把所有的 coding 任务都做完，包括写代码、装 dependency、下载模型 checkpoint，这一步基本不占 CPU；第二步才是真正跑 benchmark，那一步会吃比较多算力，所以要等机器空下来再做"
+terms = ["coding", "dependency", "checkpoint", "CPU", "benchmark"]
+note = "二十秒以上的长句。测会不会掉字、会不会触发无限重复 bug"
+
+# ── 两条基线(可跳过,按 s 就行) ──────────────────────────────────────
+#
+# 为什么留着它们:如果上面十条错得多,这两条能告诉你**错在哪一层**——
+#   纯中文也错  → 是麦克风或模型的基本功问题
+#   纯中文很准  → 说明问题就出在中英切换上
+# 没有这个对照,拿到一堆错误也不知道该往哪个方向修。
+# 赶时间可以跳过,但录了对定位问题很有用,一共不到一分钟。
+
+[[item]]
+id = "zh_pure"
+text = "今天下午我们先把语音识别这条线跑通，硬件的事情等小键盘到了再说"
+terms = []
+note = "纯中文基线(可跳过)。判断错误是出在混说上,还是中文本身就不准"
+
+[[item]]
+id = "en_pure"
+text = "Can you refactor this function and add a unit test for the edge case where the input is empty"
+terms = ["refactor", "unit test", "edge case"]
+note = "纯英文基线(可跳过)。测模型会不会把整句英文错判成中文"

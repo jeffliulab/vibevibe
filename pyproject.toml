@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vibevibe"
+version = "0.1.0"
+description = "本地中英混说语音听写 —— 说一下,按一下"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+
+# 只写名字,不公开邮箱 —— 元数据一旦发布就永久公开,爬虫会抓
+authors = [{ name = "Jeff Liu" }]
+
+keywords = [
+    "speech-recognition", "asr", "dictation", "speech-to-text",
+    "qwen3-asr", "onnx", "offline", "local", "linux",
+    "chinese", "code-switching", "voice-typing",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: X11 Applications",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Utilities",
+    "Natural Language :: Chinese (Simplified)",
+    "Natural Language :: English",
+]
+
+# 全部是纯 CPU 依赖:不装 PyTorch,不装 CUDA。
+dependencies = [
+    "numpy",
+    "onnxruntime",     # Qwen3-ASR ONNX 推理
+    "librosa",         # mel 频谱
+    "soundfile",       # 读写 wav
+    "tokenizers",      # 分词
+    "sounddevice",     # 录音(PortAudio)
+    "evdev",           # F19 通道:直读输入设备
+    "huggingface_hub", # `vibevibe setup` 下载模型权重要用
+]
+
+[project.urls]
+Homepage = "https://github.com/jeffliulab/vibevibe"
+Source = "https://github.com/jeffliulab/vibevibe"
+Issues = "https://github.com/jeffliulab/vibevibe/issues"
+
+[project.optional-dependencies]
+# 托盘图标。PyGObject 从 pip 装需要一堆编译依赖,所以更推荐用系统包:
+#     sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
+# vibevibe 会自动去 /usr/lib/python3/dist-packages 找系统的那份。
+tray = ["PyGObject"]
+# 对照基线。装了才能跑 whisper_ct2 后端。
+bench = ["faster-whisper"]
+# 1.7B 的 PyTorch 路径。约 2.5GB,只在做准确率对照且 ONNX 走不通时才需要。
+torch = ["torch", "transformers"]
+
+[project.scripts]
+vibevibe = "vibevibe.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vibevibe*"]
+
+# 配置模板、udev 规则、systemd 单元必须跟着 wheel 走,
+# 否则 pip 装完之后 `vibevibe setup` 找不到它们。
+[tool.setuptools.package-data]
+vibevibe = ["data/*", "data/icons/*"]

@@ -1,0 +1,36 @@
+# vibevibe —— 给专用小键盘放行输入设备权限
+#
+# 为什么需要它:F19 通道要直接读 /dev/input/eventN 的原始按键事件,
+# 而这些设备默认只有 root 和 input 组能读。
+#
+# 这里用 TAG+="uaccess" 而不是把用户加进 input 组,因为:
+#   uaccess  → 只有当前**登录在本机的**用户能访问**这一个**设备
+#   input 组 → 该用户能读**所有**输入设备,包括主键盘(等于全局键盘记录权限)
+# 前者的权限面小得多,能不放大就不放大。
+#
+# ── 怎么用 ──────────────────────────────────────────────────────────
+#
+# 1. 插上小键盘,查它的 VID:PID:
+#        lsusb
+#    找到你的小键盘那行,形如:
+#        Bus 001 Device 009: ID 1234:5678 XXX Keyboard
+#    那么 idVendor=1234, idProduct=5678
+#
+# 2. 把下面两个占位符换成真实值(注意:必须小写十六进制,不带 0x)
+#
+# 3. 安装并生效:
+#        sudo cp config/70-vibevibe.rules.example /etc/udev/rules.d/70-vibevibe.rules
+#        sudo udevadm control --reload-rules
+#        sudo udevadm trigger
+#    然后把小键盘拔下来重插一次。
+#
+# 4. 验证权限拿到了:
+#        vibevibe devices --input
+#    应该能看到设备且不报权限错误。
+#
+# ── 规则本体 ────────────────────────────────────────────────────────
+
+SUBSYSTEM=="input", ATTRS{idVendor}=="PLACEHOLDER_VID", ATTRS{idProduct}=="PLACEHOLDER_PID", TAG+="uaccess"
+
+# 说明:只匹配这一个 VID:PID,不会影响你其它任何键盘鼠标。
+# 如果小键盘换了型号,VID:PID 会变,记得同步改这里。

@@ -1,0 +1,38 @@
+# vibevibe 守护进程 —— 用户级 systemd 服务
+#
+# 这是**模板**:`vibevibe setup` 会把里面的 @占位符@ 换成这台机器上的真实
+# 路径,再写到 ~/.config/systemd/user/vibevibe.service。
+#
+# 想手动装的话,把 @EXEC_START@ 和 @WORKING_DIR@ 换成实际值,复制过去,然后:
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now vibevibe
+#
+# 查看:
+#     systemctl --user status vibevibe
+#     journalctl --user -u vibevibe -f
+#
+# 注意这是 --user 级服务:只在你登录后运行,不需要 root,
+# 也不会在系统里留下任何全局配置。
+
+[Unit]
+Description=vibevibe 本地语音听写守护进程
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKING_DIR@
+ExecStart=@EXEC_START@
+
+Restart=on-failure
+RestartSec=3
+
+# 注入文字要连到 X 服务器,把显示相关的环境变量带进来
+PassEnvironment=DISPLAY XAUTHORITY
+
+# 让路:听写是交互式的,但没必要跟正在跑的训练/编译抢 CPU。
+# 真正控制占用的旋钮是配置里的 intra_op_num_threads,这里只是加一层礼让。
+Nice=5
+
+[Install]
+WantedBy=graphical-session.target

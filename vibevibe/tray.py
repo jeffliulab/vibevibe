@@ -1,0 +1,318 @@
+"""系统托盘图标。
+
+GNOME 46 砍掉了内置托盘,靠 `ubuntu-appindicators` 扩展(Ubuntu 自带并默认
+启用)提供宿主端,我们这边用 AyatanaAppIndicator3 挂上去。
+
+两个开关,对应两件截然不同的事:
+
+    服务开关   —— 整个守护进程的生死。关掉 = 进程被 systemd 杀掉,
+                  **所有内存全部还给系统**(包括那 200 多 MB 的运行时开销),
+                  只剩托盘自己
+    热加载开关 —— 服务活着的前提下,模型要不要一直待在内存里。
+                  开 ≈ 3.8GB 常驻、按键立刻出字;
+                  关 ≈ 0.24GB、每次冷启动多等 1.7~2.5 秒
+
+**托盘是独立进程,不是守护进程的一部分**——必须如此,否则"关掉服务"就把
+托盘自己也关掉了,再也没法打开。
+
+它跟外界只有两条通道:
+    systemctl --user  控制服务生死
+    Unix socket       查状态、切热加载
+两条都很轻,托盘自己不加载任何模型。
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from . import ipc
+from .config import USER_CONFIG_PATH, Config, load_config
+from .i18n import set_language, t
+
+SERVICE = "vibevibe.service"
+
+# 状态 → 图标名。图标本身在 data/icons/ 里。
+ICON_OFF = "vibevibe-off"
+ICON_IDLE = "vibevibe-idle"
+ICON_RECORDING = "vibevibe-recording"
+ICON_BUSY = "vibevibe-busy"
+ICON_COLD = "vibevibe-cold"
+
+# 轮询间隔。托盘要跟得上"开始录音→出字"这种一两秒的变化,
+# 但也不能太密——它是个常驻进程,别自己变成负担。
+POLL_MS = 1200
+
+GI_SYSTEM_PATH = "/usr/lib/python3/dist-packages"
+
+MISSING_GI_HINT = """\
+托盘需要 PyGObject 和 AppIndicator 绑定,当前环境里没有。
+
+Debian / Ubuntu:
+    sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
+
+如果你用的是虚拟环境,注意 venv 默认看不到系统的 python3-gi。
+两个办法:
+    · 建 venv 时加 --system-site-packages
+    · 或者让 vibevibe 自己去找(它会自动尝试 /usr/lib/python3/dist-packages)
+
+另外 GNOME 46+ 需要托盘扩展才能显示图标(Ubuntu 自带 ubuntu-appindicators,
+默认已启用)。
+"""
+
+
+def _import_gi():
+    """把 gi 引进来。venv 里看不到系统的 python3-gi 时,自动去找一次。
+
+    这不是什么优雅的做法,但比让用户重建 venv 强 —— PyGObject 从 pip 装
+    需要一堆编译依赖,而系统上通常本来就有一份现成的。
+    """
+    try:
+        import gi  # noqa: F401
+    except ImportError:
+        if GI_SYSTEM_PATH not in sys.path and Path(GI_SYSTEM_PATH).is_dir():
+            sys.path.append(GI_SYSTEM_PATH)
+        try:
+            import gi  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(MISSING_GI_HINT) from exc
+
+    import gi
+
+    gi.require_version("Gtk", "3.0")
+    try:
+        gi.require_version("AyatanaAppIndicator3", "0.1")
+        from gi.repository import AyatanaAppIndicator3 as appindicator
+    except (ValueError, ImportError):
+        try:
+            gi.require_version("AppIndicator3", "0.1")
+            from gi.repository import AppIndicator3 as appindicator
+        except (ValueError, ImportError) as exc:
+            raise ImportError(MISSING_GI_HINT) from exc
+
+    from gi.repository import GLib, Gtk
+
+    return Gtk, GLib, appindicator
+
+
+def _systemctl(*args: str) -> tuple[bool, str]:
+    try:
+        p = subprocess.run(
+            ["systemctl", "--user", *args],
+            capture_output=True, text=True, timeout=20)
+        return p.returncode == 0, (p.stdout + p.stderr).strip()
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _service_active() -> bool:
+    ok, out = _systemctl("is-active", SERVICE)
+    return ok and out.strip() == "active"
+
+
+def _service_installed() -> bool:
+    ok, _ = _systemctl("cat", SERVICE)
+    return ok
+
+
+class Tray:
+    def __init__(self, cfg: Config) -> None:
+        self.cfg = cfg
+        set_language(cfg.ui.language)
+        self.Gtk, self.GLib, self.appindicator = _import_gi()
+
+        # 守护进程的最新状态。拿不到就是 None(服务没跑)
+        self.status: dict | None = None
+        self._suppress = False  # 程序化改开关时,别触发回调
+
+        icon_dir = Path(__file__).resolve().parent / "data" / "icons"
+        self.indicator = self.appindicator.Indicator.new_with_path(
+            "vibevibe",
+            ICON_OFF,
+            self.appindicator.IndicatorCategory.APPLICATION_STATUS,
+            str(icon_dir),
+        )
+        self.indicator.set_status(self.appindicator.IndicatorStatus.ACTIVE)
+        self.indicator.set_title("vibevibe")
+
+        self._build_menu()
+        self._refresh()
+        self.GLib.timeout_add(POLL_MS, self._tick)
+
+    # ── 菜单 ────────────────────────────────────────────────────────
+
+    def _build_menu(self) -> None:
+        Gtk = self.Gtk
+        menu = Gtk.Menu()
+
+        self.item_state = Gtk.MenuItem(label="…")
+        self.item_state.set_sensitive(False)
+        menu.append(self.item_state)
+
+        self.item_mem = Gtk.MenuItem(label="")
+        self.item_mem.set_sensitive(False)
+        menu.append(self.item_mem)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        self.item_service = Gtk.CheckMenuItem(label=t("tray.service"))
+        self.item_service.connect("toggled", self.on_service_toggled)
+        menu.append(self.item_service)
+
+        self.item_hot = Gtk.CheckMenuItem(label=t("tray.hot_reload"))
+        self.item_hot.connect("toggled", self.on_hot_toggled)
+        menu.append(self.item_hot)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        self.item_settings = Gtk.MenuItem(label=t("tray.settings"))
+        self.item_settings.connect("activate", self.on_settings)
+        menu.append(self.item_settings)
+
+        item_log = Gtk.MenuItem(label=t("tray.open_log"))
+        item_log.connect("activate", self.on_open_log)
+        menu.append(item_log)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        item_quit = Gtk.MenuItem(label=t("tray.quit"))
+        item_quit.connect("activate", self.on_quit)
+        menu.append(item_quit)
+
+        menu.show_all()
+        self.indicator.set_menu(menu)
+
+    # ── 状态刷新 ────────────────────────────────────────────────────
+
+    def _poll_daemon(self) -> dict | None:
+        try:
+            return ipc.command(self.cfg.socket_path, ipc.CMD_STATUS, timeout=2.0)
+        except ipc.IpcError:
+            return None
+
+    def _refresh(self) -> None:
+        active = _service_active()
+        self.status = self._poll_daemon() if active else None
+        st = self.status or {}
+
+        # ── 图标 ──
+        if not active or self.status is None:
+            icon, label = ICON_OFF, t("tray.title_off")
+        else:
+            state = st.get("state", "")
+            if state == ipc.STATE_RECORDING:
+                icon, label = ICON_RECORDING, t("tray.title_recording")
+            elif state in (ipc.STATE_TRANSCRIBING, ipc.STATE_LOADING):
+                icon, label = ICON_BUSY, t("tray.title_busy")
+            elif not st.get("model_in_memory", True):
+                icon, label = ICON_COLD, t("tray.title_cold")
+            else:
+                icon, label = ICON_IDLE, t("tray.title_idle")
+        self.indicator.set_icon_full(icon, label)
+
+        # ── 菜单文字 ──
+        self.item_state.set_label(f"vibevibe · {label}")
+        if self.status:
+            mem = st.get("memory_mb")
+            last = (st.get("last_text") or "").strip()
+            self.item_mem.set_label(
+                (t("tray.memory") % mem) + ("   " + t("tray.last") % last[:24] if last else ""))
+            self.item_mem.show()
+        else:
+            self.item_mem.set_label(t("tray.memory_off"))
+
+        # ── 两个开关 ──
+        self._suppress = True
+        self.item_service.set_active(active)
+        hot = bool(st.get("hot_reload", self.cfg.daemon.hot_reload))
+        self.item_hot.set_active(hot if active else False)
+        # 热加载只有在服务开着时才有意义
+        self.item_hot.set_sensitive(active and self.status is not None)
+        self._suppress = False
+
+    def _tick(self) -> bool:
+        try:
+            self._refresh()
+        except Exception as exc:  # 托盘绝不能因为一次刷新失败就死掉
+            print(t("tray.refresh_error") % exc, file=sys.stderr)
+        return True  # 继续下一轮
+
+    # ── 回调 ────────────────────────────────────────────────────────
+
+    def on_service_toggled(self, item) -> None:  # noqa: ANN001
+        if self._suppress:
+            return
+        want = item.get_active()
+        if want:
+            ok, out = _systemctl("start", SERVICE)
+        else:
+            ok, out = _systemctl("stop", SERVICE)
+        if not ok:
+            print(t("tray.service_failed") % out, file=sys.stderr)
+        # 服务起停要点时间,稍后再刷新一次
+        self.GLib.timeout_add(700, self._refresh_once)
+
+    def on_hot_toggled(self, item) -> None:  # noqa: ANN001
+        if self._suppress:
+            return
+        want = item.get_active()
+        try:
+            ipc.command(self.cfg.socket_path, ipc.CMD_SET_HOT, hot=want, timeout=5.0)
+        except ipc.IpcError as exc:
+            print(t("tray.hot_failed") % exc, file=sys.stderr)
+        self.GLib.timeout_add(400, self._refresh_once)
+
+    def _refresh_once(self) -> bool:
+        self._refresh()
+        return False  # 只跑一次
+
+    def on_settings(self, _item) -> None:  # noqa: ANN001
+        from .settings_dialog import SettingsDialog
+
+        # 设置窗口关掉之后语言可能变了,菜单文案得跟着重建
+        dlg = SettingsDialog(load_config(), (self.Gtk, self.GLib))
+        dlg.win.connect("destroy", lambda _w: self._reload_language())
+
+    def _reload_language(self) -> None:
+        cfg = load_config()
+        if cfg.ui.language != self.cfg.ui.language:
+            self.cfg = cfg
+            set_language(cfg.ui.language)
+            self._build_menu()
+            self._refresh()
+
+    def on_open_log(self, _item) -> None:  # noqa: ANN001
+        # 优先看 systemd 的日志(服务是它管的);它不在就退回文件
+        if _service_installed():
+            subprocess.Popen([
+                "x-terminal-emulator", "-e",
+                "journalctl --user -u vibevibe -f",
+            ]) if _which("x-terminal-emulator") else subprocess.Popen(
+                ["xdg-open", str(self.cfg.log_path)])
+        else:
+            subprocess.Popen(["xdg-open", str(self.cfg.log_path)])
+
+    def on_quit(self, _item) -> None:  # noqa: ANN001
+        self.Gtk.main_quit()
+
+    def run(self) -> int:
+        self.Gtk.main()
+        return 0
+
+
+def _which(name: str) -> str | None:
+    import shutil
+
+    return shutil.which(name)
+
+
+def run_tray(config_path: Path | None = None) -> int:
+    cfg = load_config(config_path)
+    try:
+        tray = Tray(cfg)
+    except ImportError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return tray.run()

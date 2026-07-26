@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- vibevibe 的 V。两笔构成,右笔略短并向内收,
+       既是字母 V,也像一个收束的声波。 -->
+  <path d="M4.6 5.4 L12 18.4 L19.4 5.4"
+        fill="none" stroke="#c8ccd4" stroke-width="2.7"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.35"/>
+  <path d="M9.2 5.4 L12 10.3 L14.8 5.4"
+        fill="none" stroke="#c8ccd4" stroke-width="2.0"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.20"/>
+  
+</svg>
