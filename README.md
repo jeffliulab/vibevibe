@@ -133,14 +133,41 @@ vibevibe setup
 [2/7] System tools
 [3/7] Config file            ~/.config/vibevibe/config.toml
 [4/7] Model weights          ~4 GB
-[5/7] Hotkey                 default: Pause
+[5/7] Desktop shortcut      default: Super+Shift+V
 [6/7] Autostart service      systemd --user
 [7/7] Tray icon
 ```
 
-Then press **Pause**, say something, press **Pause** again. The text appears at your cursor.
+Then press **Super+Shift+V**, say something, press it again. The text appears at your cursor.
 
 ---
+
+## Triggering
+
+Two independent channels, both active at once:
+
+| Channel | Key | Needs | For |
+| --- | --- | --- | --- |
+| **Desktop shortcut** | `Super+Shift+V` (configurable) | **nothing** — no hardware, no permissions | anyone, right after `pip install` |
+| **Keypad** | `F19` (fixed) | a two-key macropad + one udev rule scoped to it | people with the dedicated hardware |
+
+The keypad channel reads the input device directly, so it can use F13–F24 — keys that
+desktop shortcuts cannot bind at all. The macropad's firmware is flashed with F19 too,
+so it works on any machine without installing anything.
+
+**Why `Super+Shift+V` and not `Ctrl+Shift+V`:** the latter is "paste as plain text" in
+browsers, VS Code and terminals. Those are *in-application* bindings, invisible to any
+system-level check. Applications rarely touch Super — it belongs to the desktop
+environment — so Super combos are the safe choice.
+
+Settings → **Keys** lets you rebind either channel by pressing the key you want
+(combos included). Every candidate is checked for conflicts first:
+
+- already bound by a system shortcut → **rejected**
+- already bound by vibevibe's own shortcut → **rejected** (both channels would fire, and
+  in toggle mode that cancels out — it looks like nothing happened)
+- has an X11 keysym → **allowed with a warning**, because it will also reach the focused
+  application
 
 ## Usage
 
@@ -148,7 +175,7 @@ Then press **Pause**, say something, press **Pause** again. The text appears at 
 
 | Action | Result |
 | --- | --- |
-| Press the hotkey | Recording starts — short high beep |
+| Press the trigger key | Recording starts — short high beep |
 | Press it again | Text is transcribed and pasted at the cursor — lower beep |
 | Something went wrong | A distinctly lower, longer beep, and **nothing is pasted** |
 
@@ -173,6 +200,8 @@ Two switches:
 | **Service** | Starts / stops the daemon entirely | 3.9 GB → **0** (only the 44 MB tray remains) |
 | **Hot reload** | Whether the model stays in RAM | on 3.9 GB / off **0.24 GB** |
 
+The menu also has **About**, which shows the version, the paths in use, and a button to open the log.
+
 > The tray is a **separate process** from the daemon. It has to be — otherwise "stop the service" would kill the very thing you use to start it again.
 
 ### Settings
@@ -182,6 +211,7 @@ Tray → **Settings…**, or `vibevibe settings`.
 | Tab | Contains |
 | --- | --- |
 | General | Interface & log language, recognition model, microphone |
+| Keys | Trigger mode, desktop shortcut, keypad device and trigger key — with conflict checking |
 | Performance | Hot reload, idle-unload timeout, inference threads |
 | Feedback | Sound cues and volume (with a test button), text injection method |
 | Advanced | Audio preprocessing, **Open full config file** |
@@ -324,7 +354,7 @@ Alpha. Working and used daily by the author, but young.
 - [x] Hotkey channel via GNOME shortcuts
 - [x] Tray icon, settings window, bilingual UI
 - [x] systemd user service, PyPI release
-- [ ] **Hold-to-talk** with a dedicated two-key macropad — code and udev rule are written but **not yet verified on real hardware**
+- [x] **Two-key macropad** — keys flashed over the VIA protocol (left → F19, right → Enter), verified on real hardware
 - [ ] Wayland support
 - [ ] Context biasing to fix the remaining proper nouns
 

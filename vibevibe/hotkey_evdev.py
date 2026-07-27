@@ -4,18 +4,28 @@
 (实测这台机器 keycode 197 是空的),GNOME 的快捷键设置界面
 根本绑不了它。所以只能绕过 X,直接从内核的 evdev 层读原始按键事件。
 
-这条路反过来还带来两个好处:
-  1. 能精确知道"按下"和"松开",于是 hold(按住说话)模式才成立
-     ——GNOME 快捷键只能感知按下
-  2. 对**专用小键盘**可以整个独占(EVIOCGRAB),按键一个字符都
-     不会漏进当前窗口
+这条路带来的真正好处是:**能精确知道"按下"和"松开"**,于是 hold
+(按住说话)模式才成立 —— GNOME 快捷键只能感知按下。
 
-独占是设备级的,不能只独占某一个键。所以:
-  - 专用小键盘(就一两个键)→ 可以独占,干净
-  - 主键盘 → **绝不能独占**,否则你所有的输入都会被吞掉
+## 关于独占(EVIOCGRAB),两条实测得出的结论
 
-代码里有一道硬闸:开启 grab 时如果设备的按键数超过阈值,直接拒绝,
-免得配置写错把整台机器的键盘吞了。
+**一、两键布局下必须关掉独占。** 独占是**整设备级**的,不能只独占某一个键。
+「左键触发听写 + 右键透传回车」这种布局,一旦独占,右键的 Enter 也会被吞掉,
+永远送不到你正在打字的窗口。
+
+不独占也没关系:F19 在 X11 默认布局里没有 keysym(实测这台机器
+keycode 197 是空的),漏给应用不会有任何反应。当初为「不冲突」选 F19,
+顺带解决了「不能独占」。
+
+**二、用按键数量当安全闸的判据是错的。** 原来的代码是「按键数超过 8 就
+拒绝独占」,想借此挡住主键盘。实测:
+
+    T TYPEKEY Z2(两键小键盘)   声明 279 个键
+    USB Keyboard(主键盘)       声明 143 个键
+
+QMK 系固件不管物理上几个键,都会声明整个键位范围 —— 数量根本区分不出
+主键盘。现在换成设备名匹配(grab_expect_name),挡的是真实风险:
+by-id 路径在换硬件后指向了别的设备。
 """
 
 from __future__ import annotations
@@ -39,6 +49,21 @@ class HotkeyError(Exception):
     pass
 
 
+# 修饰键。组合键里除了最后一个,其余必须都是这里面的。
+MODIFIER_NAMES = (
+    "KEY_LEFTCTRL", "KEY_RIGHTCTRL",
+    "KEY_LEFTSHIFT", "KEY_RIGHTSHIFT",
+    "KEY_LEFTALT", "KEY_RIGHTALT",
+    "KEY_LEFTMETA", "KEY_RIGHTMETA",
+)
+
+
+def modifier_codes() -> set[int]:
+    from evdev import ecodes
+
+    return {ecodes.ecodes[n] for n in MODIFIER_NAMES if n in ecodes.ecodes}
+
+
 def resolve_keycode(key_name: str) -> int:
     """把 "KEY_F19" 这样的名字翻成 evdev 的数字码。"""
     from evdev import ecodes
@@ -49,6 +74,32 @@ def resolve_keycode(key_name: str) -> int:
             f"不认识的按键名 {key_name!r}。要用 evdev 的写法,比如 KEY_F19、KEY_F20。"
         )
     return code
+
+
+def parse_combo(spec: str) -> tuple[int, frozenset[int]]:
+    """把 "KEY_LEFTCTRL+KEY_V" 解析成 (触发键码, 需要按住的修饰键码集合)。
+
+    单个键就是 ("KEY_F19", 空集合)。约定:**最后一个是触发键**,
+    前面的必须全是修饰键 —— 组合键只能是「按住若干修饰键 + 敲一个普通键」,
+    不支持两个普通键同时按(那既不常见,也没法可靠地判断顺序)。
+    """
+    parts = [p.strip().upper() for p in spec.split("+") if p.strip()]
+    if not parts:
+        raise HotkeyError("触发键没填")
+
+    trigger = resolve_keycode(parts[-1])
+    mods = set()
+    valid_mods = modifier_codes()
+    for name in parts[:-1]:
+        code = resolve_keycode(name)
+        if code not in valid_mods:
+            raise HotkeyError(
+                f"{name} 不是修饰键。组合键的写法是「若干修饰键 + 一个普通键」,"
+                f"比如 KEY_LEFTCTRL+KEY_V。修饰键只能是: "
+                + ", ".join(MODIFIER_NAMES)
+            )
+        mods.add(code)
+    return trigger, frozenset(mods)
 
 
 def list_devices() -> list[str]:
@@ -126,7 +177,11 @@ class HotkeyListener:
     def __init__(self, cfg: HotkeyConfig, daemon) -> None:  # noqa: ANN001
         self.cfg = cfg
         self.daemon = daemon
-        self.keycode = resolve_keycode(cfg.key)
+        # 支持组合键:"KEY_F19" 或 "KEY_LEFTCTRL+KEY_V"
+        self.keycode, self.required_mods = parse_combo(cfg.key)
+        # 当前按住的修饰键。组合键要靠它判断"够不够条件"。
+        self._held_mods: set[int] = set()
+        self._mod_codes = modifier_codes()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._device = None
@@ -153,30 +208,40 @@ class HotkeyListener:
 
         dev = InputDevice(str(path))
 
-        keys = dev.capabilities().get(ecodes.EV_KEY, [])
-        if self.keycode not in keys:
-            def key_name(code: int) -> str:
-                # ecodes.KEY[code] 可能是字符串,也可能是同码多名的列表
-                name = ecodes.KEY.get(code, code)
-                return name if isinstance(name, str) else str(name)
+        def key_name(code: int) -> str:
+            # ecodes.KEY[code] 可能是字符串,也可能是同码多名的列表
+            name = ecodes.KEY.get(code, code)
+            return name if isinstance(name, str) else str(name)
 
+        # 组合键要求的每一个键(触发键 + 各修饰键)设备上都得有
+        keys = dev.capabilities().get(ecodes.EV_KEY, [])
+        missing = [c for c in ({self.keycode} | self.required_mods) if c not in keys]
+        if missing:
             names = ", ".join(key_name(k) for k in keys[:20])
+            lacking = ", ".join(key_name(c) for c in missing)
             dev.close()
             raise HotkeyError(
-                f"设备 {dev.name!r} 上没有 {self.cfg.key} 这个键。"
-                f"它有的键(前 20 个): {names}"
+                f"设备 {dev.name!r} 上没有 {lacking}"
+                f"({self.cfg.key} 需要它)。它有的键(前 20 个): {names}"
             )
 
         if self.cfg.grab:
-            # 安全闸:独占是设备级的。按键太多说明这多半是主键盘,
-            # 独占它会把你所有的输入都吞掉。宁可不独占也不能吞。
-            if len(keys) > self.cfg.grab_max_keys:
+            # 安全闸:设备名必须对得上。
+            #
+            # 原来这里用「按键数量超过阈值就拒绝」,实测证明那个判据是错的:
+            # QMK 系固件不管物理几个键都声明整个键位范围,两键小键盘声明了
+            # 279 个键、比主键盘还多。数量区分不出主键盘。
+            #
+            # 名字匹配挡的是真实风险:by-id 路径在换硬件后指向了别的设备。
+            expect = (self.cfg.grab_expect_name or "").strip()
+            if expect and expect.lower() not in dev.name.lower():
+                actual = dev.name
                 dev.close()
                 raise HotkeyError(
-                    f"拒绝独占 {dev.name!r}:它有 {len(keys)} 个按键,"
-                    f"超过了 grab_max_keys={self.cfg.grab_max_keys}。"
-                    "独占是整个设备的,对主键盘独占会吃掉你所有输入。"
-                    "只应该对专用小键盘开 grab。"
+                    f"拒绝独占:配置里 grab_expect_name={expect!r},"
+                    f"但这个设备叫 {actual!r}。\n"
+                    "独占是整设备级的,认错设备会把那个设备的所有输入都吞掉。"
+                    "确认无误后再改配置。"
                 )
             dev.grab()
             log.info("已独占设备 %r(按键不会漏进当前窗口)", dev.name)
@@ -198,19 +263,24 @@ class HotkeyListener:
             pass
         self._device = None
         self._connected = False
+        # 设备断开时清掉,否则重连后会残留"某个修饰键还按着"的假状态
+        self._held_mods.clear()
 
     # ── 事件循环 ────────────────────────────────────────────────────
 
     def _handle_key(self, value: int) -> None:
+        from .i18n import t
+
+        source = t("daemon.src_hotkey") % self.cfg.key
         if self.cfg.mode == "hold":
             if value == KEY_DOWN:
-                self.daemon.start_recording()
+                self.daemon.start_recording(source)
             elif value == KEY_UP:
                 self.daemon.stop_recording()
             # KEY_REPEAT(按住不放时内核发的重复事件)直接忽略
         elif self.cfg.mode == "toggle":
             if value == KEY_DOWN:
-                self.daemon.toggle()
+                self.daemon.toggle(source)
         else:
             log.error("不认识的 hotkey.mode %r,只支持 hold / toggle", self.cfg.mode)
 
@@ -230,7 +300,23 @@ class HotkeyListener:
                 for event in self._device.read_loop():
                     if self._stop.is_set():
                         break
-                    if event.type != ecodes.EV_KEY or event.code != self.keycode:
+                    if event.type != ecodes.EV_KEY:
+                        continue
+
+                    # 先更新修饰键按住状态(组合键靠它判断条件够不够)
+                    if event.code in self._mod_codes:
+                        if event.value == KEY_DOWN:
+                            self._held_mods.add(event.code)
+                        elif event.value == KEY_UP:
+                            self._held_mods.discard(event.code)
+                        continue
+
+                    if event.code != self.keycode:
+                        continue
+                    # 组合键:按下时必须所有要求的修饰键都按住了。
+                    # 松开时不查 —— 松手顺序不该影响 hold 模式的结束。
+                    if (event.value == KEY_DOWN
+                            and not self.required_mods <= self._held_mods):
                         continue
                     self._handle_key(event.value)
 

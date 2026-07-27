@@ -98,6 +98,7 @@ class Daemon:
 
         # 最近一次的结果,给 status 看
         self.last_text = ""
+        self.last_source = ""
         self.last_error = ""
         self.last_rtf = 0.0
         self.last_duration = 0.0
@@ -117,7 +118,13 @@ class Daemon:
 
     # ── 录音 / 转写 ─────────────────────────────────────────────────
 
-    def start_recording(self) -> dict[str, Any]:
+    def start_recording(self, source: str = "") -> dict[str, Any]:
+        """开始录音。
+
+        source 是**哪条通道触发的**,只用于日志和 status。
+        两条通道(evdev 直读小键盘 / socket 收快捷键)最终都走这里,
+        不记来源的话事后根本分不清刚才是按的哪个键。
+        """
         with self._lock:
             if self._state == ipc.STATE_RECORDING:
                 return {"ok": True, "state": self._state, "note": "已经在录了"}
@@ -131,8 +138,9 @@ class Daemon:
                 self.last_error = str(exc)
                 return {"ok": False, "state": self._state, "error": str(exc)}
             self._set_state(ipc.STATE_RECORDING)
+            self.last_source = source or t("daemon.src_ipc")
         self.sound.play("start")
-        log.info(t("daemon.rec_start"))
+        log.info(t("daemon.rec_start"), self.last_source)
         return {"ok": True, "state": ipc.STATE_RECORDING}
 
     def stop_recording(self) -> dict[str, Any]:
@@ -174,10 +182,10 @@ class Daemon:
         log.info(t("daemon.rec_cancelled"))
         return {"ok": True, "state": ipc.STATE_IDLE}
 
-    def toggle(self) -> dict[str, Any]:
+    def toggle(self, source: str = "") -> dict[str, Any]:
         if self.state == ipc.STATE_RECORDING:
             return self.stop_recording()
-        return self.start_recording()
+        return self.start_recording(source)
 
     def _transcribe_and_inject(self, pcm) -> None:  # noqa: ANN001
         try:
@@ -285,6 +293,7 @@ class Daemon:
                 "config": str(self.cfg.source_path or "(全默认值)"),
                 "hotkey": self._hotkey.describe() if self._hotkey else "未启用",
                 "recording_sec": round(self.recorder.duration_sec, 2),
+                "last_source": self.last_source,
                 "model_in_memory": self._model_loaded,
                 "hot_reload": self.cfg.daemon.hot_reload,
                 "memory_mb": round(_rss_mb()),

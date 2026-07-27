@@ -29,6 +29,16 @@ from . import ipc
 from .config import USER_CONFIG_PATH, Config, load_config, patch_config_value
 from .i18n import LANGUAGES, set_language, t
 
+# 组合键里修饰键的固定排序。不定序的话同一个组合会有多种写法
+# (KEY_LEFTCTRL+KEY_LEFTSHIFT+KEY_A 和 KEY_LEFTSHIFT+KEY_LEFTCTRL+KEY_A),
+# 存进配置后比对起来很别扭。
+MOD_ORDER = (
+    "KEY_LEFTCTRL", "KEY_RIGHTCTRL",
+    "KEY_LEFTALT", "KEY_RIGHTALT",
+    "KEY_LEFTSHIFT", "KEY_RIGHTSHIFT",
+    "KEY_LEFTMETA", "KEY_RIGHTMETA",
+)
+
 # 界面上放哪些项。刻意只放常用的 —— 全放会变成一堵墙,反而没人看。
 BACKENDS = [
     ("qwen_onnx_1p7b", "Qwen3-ASR 1.7B  (更准)", "Qwen3-ASR 1.7B  (accurate)"),
@@ -64,6 +74,7 @@ class SettingsDialog:
         outer.pack_start(self.notebook, True, True, 0)
 
         self._page_general()
+        self._page_keys()
         self._page_perf()
         self._page_feedback()
         self._page_advanced()
@@ -118,6 +129,16 @@ class SettingsDialog:
         box.set_margin_end(16)
         self.notebook.append_page(box, Gtk.Label(label=title))
         return box
+
+    def _section(self, box, title: str) -> None:
+        """分区标题。两条触发通道差别很大(要不要硬件、要不要权限),
+        混在一起列会让人分不清哪个开关管哪条路。"""
+        Gtk = self.Gtk
+        lbl = Gtk.Label()
+        lbl.set_markup(f"<b>{_esc(title)}</b>")
+        lbl.set_xalign(0.0)
+        lbl.set_margin_top(6)
+        box.pack_start(lbl, False, False, 0)
 
     def _row(self, box, label_text: str, widget, hint: str = ""):  # noqa: ANN001
         """一行设置:标题在上、控件靠右、说明在下(小字灰色)。
@@ -186,6 +207,302 @@ class SettingsDialog:
         self.combo_mic.set_active_id(self.cfg.audio.input_device or "")
         self.combo_mic.connect("changed", self.on_simple, "audio", "input_device", False)
         self._row(box, t("settings.mic"), self.combo_mic)
+
+    def _list_key_devices(self) -> list[tuple[str, str]]:
+        """列出 by-id 下的键盘类设备,返回 [(稳定路径, 显示名)]。
+
+        只列 by-id 稳定路径 —— /dev/input/eventN 的编号重新插拔就变,
+        写进配置迟早指错设备。
+        """
+        from pathlib import Path as _P
+
+        out = []
+        by_id = _P("/dev/input/by-id")
+        if not by_id.is_dir():
+            return out
+        for link in sorted(by_id.iterdir()):
+            if not link.name.endswith("-event-kbd"):
+                continue
+            label = link.name.replace("usb-", "").replace("-event-kbd", "")
+            try:
+                from evdev import InputDevice
+
+                dev = InputDevice(str(link))
+                label = f"{dev.name}"
+                dev.close()
+            except Exception:
+                pass  # 没权限就退回用文件名,不报错
+            out.append((str(link), label))
+        return out
+
+    def _page_keys(self) -> None:
+        Gtk = self.Gtk
+        box = self._page(t("settings.tab_keys"))
+
+        # ── 触发方式放在最前面 ──
+        # 它跨越两条通道(虽然 hold 只有小键盘那条支持),而且是最常调的一项,
+        # 所以排在分区之上,不归属于任何一个分区。
+        self.combo_mode = Gtk.ComboBoxText()
+        self.combo_mode.append("toggle", t("settings.hotkey_mode_toggle"))
+        self.combo_mode.append("hold", t("settings.hotkey_mode_hold"))
+        self.combo_mode.set_active_id(self.cfg.hotkey.mode)
+        self.combo_mode.connect("changed", self.on_simple, "hotkey", "mode", True)
+        self._row(box, t("settings.hotkey_mode"), self.combo_mode,
+                  t("settings.hotkey_mode_hint"))
+
+        # ── 分区一:桌面快捷键(放前面,因为大多数人没有专用小键盘)──
+        self._section(box, t("settings.sec_shortcut"))
+
+        self.sw_shortcut = Gtk.Switch()
+        self.sw_shortcut.set_active(self.cfg.shortcut.enabled)
+        self.sw_shortcut.connect(
+            "notify::active", self.on_switch, "shortcut", "enabled", False)
+        self._row(box, t("settings.shortcut_enabled"), _wrap(Gtk, self.sw_shortcut),
+                  t("settings.shortcut_hint"))
+
+        acc_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.entry_accel = Gtk.Entry()
+        self.entry_accel.set_text(self.cfg.shortcut.accel)
+        self.entry_accel.set_width_chars(20)
+        self.entry_accel.set_editable(False)
+        acc_box.pack_start(self.entry_accel, False, False, 0)
+        btn_acc = Gtk.Button(label=t("settings.shortcut_capture"))
+        btn_acc.connect("clicked", self.on_capture_accel)
+        acc_box.pack_start(btn_acc, False, False, 0)
+        self._row(box, t("settings.shortcut_accel"), acc_box,
+                  t("settings.shortcut_accel_hint"))
+
+        # ── 分区二:小键盘 ──
+        self._section(box, t("settings.sec_keypad"))
+
+        self.sw_hotkey = Gtk.Switch()
+        self.sw_hotkey.set_active(self.cfg.hotkey.enabled)
+        self.sw_hotkey.connect(
+            "notify::active", self.on_switch, "hotkey", "enabled", True)
+        self._row(box, t("settings.hotkey_enabled"), _wrap(Gtk, self.sw_hotkey),
+                  t("settings.hotkey_enabled_hint"))
+
+        # 设备
+        self.combo_kbd = Gtk.ComboBoxText()
+        devices = self._list_key_devices()
+        if devices:
+            for path, label in devices:
+                self.combo_kbd.append(path, label)
+        else:
+            self.combo_kbd.append("", t("settings.hotkey_no_device"))
+        self.combo_kbd.set_active_id(self.cfg.hotkey.device or "")
+        self.combo_kbd.connect("changed", self.on_simple, "hotkey", "device", True)
+        self._row(box, t("settings.hotkey_device"), self.combo_kbd,
+                  t("settings.hotkey_device_hint"))
+
+        # 触发键 + 捕获按钮
+        key_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.entry_key = Gtk.Entry()
+        self.entry_key.set_text(self.cfg.hotkey.key)
+        self.entry_key.set_width_chars(12)
+        self.entry_key.set_editable(False)   # 只能靠捕获改,免得手打错拼写
+        key_box.pack_start(self.entry_key, False, False, 0)
+        self.btn_capture = Gtk.Button(label=t("settings.hotkey_capture"))
+        self.btn_capture.connect("clicked", self.on_capture_key)
+        key_box.pack_start(self.btn_capture, False, False, 0)
+        self._row(box, t("settings.hotkey_key"), key_box,
+                  t("settings.keypad_fixed_hint") + "\n" + t("settings.hotkey_key_hint"))
+
+
+    def on_capture_accel(self, btn) -> None:  # noqa: ANN001
+        """捕获桌面快捷键。
+
+        跟小键盘那个捕获不同:这条通道走 GNOME,所以直接用 GTK 的按键事件
+        就行,**不需要 evdev、不需要任何权限**。
+        """
+        Gtk = self.Gtk
+        dlg = Gtk.Dialog(title=t("settings.shortcut_capture"),
+                         transient_for=self.win, modal=True)
+        dlg.set_default_size(360, 120)
+        lbl = Gtk.Label(label=t("settings.hotkey_capture_wait") % 0)
+        lbl.set_markup(f"<big>{_esc(t('settings.shortcut_capture'))}</big>")
+        dlg.get_content_area().pack_start(lbl, True, True, 12)
+        dlg.add_button(t("settings.cancel"), Gtk.ResponseType.CANCEL)
+
+        captured = {"accel": None}
+
+        def on_key(_w, ev) -> bool:  # noqa: ANN001
+            from gi.repository import Gdk
+
+            mods = []
+            st = ev.state
+            if st & Gdk.ModifierType.CONTROL_MASK:
+                mods.append("<Control>")
+            if st & Gdk.ModifierType.MOD1_MASK:
+                mods.append("<Alt>")
+            if st & Gdk.ModifierType.SHIFT_MASK:
+                mods.append("<Shift>")
+            if st & Gdk.ModifierType.SUPER_MASK:
+                mods.append("<Super>")
+            name = Gdk.keyval_name(ev.keyval) or ""
+            # 只按修饰键不算 —— 等一个真正的主键
+            if name in ("Control_L", "Control_R", "Alt_L", "Alt_R", "Shift_L",
+                        "Shift_R", "Super_L", "Super_R", "ISO_Level3_Shift"):
+                return True
+            if not mods:
+                return True   # 裸键不接受:没有修饰键的快捷键太容易误触
+            captured["accel"] = "".join(mods) + name
+            dlg.response(Gtk.ResponseType.OK)
+            return True
+
+        dlg.connect("key-press-event", on_key)
+        dlg.show_all()
+        resp = dlg.run()
+        dlg.destroy()
+        if resp != Gtk.ResponseType.OK or not captured["accel"]:
+            return
+
+        accel = captured["accel"]
+        from .hotkey_conflict import check_accel
+
+        issues = check_accel(accel)
+        if any(c.blocker for c in issues):
+            self._error_dialog(
+                t("settings.conflict_title"),
+                (t("settings.conflict_blocked") % accel) + "\n\n"
+                + "\n\n".join(f"• {c.title}\n  {c.detail}" for c in issues))
+            return
+
+        self.entry_accel.set_text(accel)
+        self._stage("shortcut", "accel", accel, needs_restart=False)
+
+    # ── 按下即捕获 ──────────────────────────────────────────────────
+
+    CAPTURE_SEC = 5
+
+    def on_capture_key(self, _btn) -> None:  # noqa: ANN001
+        """监听选中的设备,把你按下的第一个键记成触发键。
+
+        比让人手打 "KEY_F19" 强:拼错了要到运行时才报错,而且没人记得住
+        evdev 的键名写法。
+        """
+        path = self.combo_kbd.get_active_id()
+        if not path:
+            self.status.set_markup(
+                f'<span size="small">✗ {_esc(t("settings.hotkey_no_device"))}</span>')
+            return
+
+        try:
+            from evdev import InputDevice, ecodes
+        except ImportError as exc:
+            self.status.set_markup(
+                f'<span size="small">✗ {_esc(t("settings.hotkey_capture_err") % exc)}</span>')
+            return
+
+        try:
+            dev = InputDevice(path)
+        except Exception as exc:
+            self.status.set_markup(
+                f'<span size="small">✗ {_esc(t("settings.hotkey_capture_err") % exc)}</span>')
+            return
+
+        self.btn_capture.set_sensitive(False)
+        state = {"left": self.CAPTURE_SEC, "done": False}
+
+        def finish(keyname: str | None) -> None:
+            state["done"] = True
+            try:
+                dev.close()
+            except Exception:
+                pass
+            self.btn_capture.set_sensitive(True)
+            if not keyname:
+                self._update_status()
+                return
+
+            # 捕获到了先查冲突 —— 撞车的后果(按一下触发两次 / 顺手干了
+            # 别的事)不会当场报错,只会表现成"莫名其妙",必须在这儿拦住。
+            from .hotkey_conflict import check as check_conflicts
+
+            issues = check_conflicts(keyname)
+            blockers = [c for c in issues if c.blocker]
+
+            if blockers:
+                self._error_dialog(
+                    t("settings.conflict_title"),
+                    (t("settings.conflict_blocked") % keyname) + "\n\n"
+                    + "\n\n".join(f"• {c.title}\n  {c.detail}" for c in blockers))
+                self._update_status()
+                return
+
+            self.entry_key.set_text(keyname)
+            self._stage("hotkey", "key", keyname, needs_restart=True)
+
+            if issues:
+                self._error_dialog(
+                    t("settings.conflict_title"),
+                    (t("settings.conflict_warn") % keyname) + "\n\n"
+                    + "\n\n".join(f"• {c.title}\n  {c.detail}" for c in issues))
+            self.status.set_markup(
+                f'<span size="small">✓ '
+                f'{_esc(t("settings.hotkey_capture_got") % keyname)}</span>')
+
+        from .hotkey_evdev import modifier_codes
+
+        mods = modifier_codes()
+        held: set[int] = set()
+
+        def name_of(code: int) -> str | None:
+            n = ecodes.KEY.get(code)
+            return n[0] if isinstance(n, list) else n
+
+        def poll() -> bool:
+            """收按键。修饰键只记"按住了",遇到第一个**普通键**才收工。
+
+            这样按 Ctrl+V 抓到的是 "KEY_LEFTCTRL+KEY_V" 而不是 "KEY_LEFTCTRL"
+            ——只取第一个按下事件的话,拿到的永远是先按下去的那个修饰键。
+            """
+            if state["done"]:
+                return False
+            try:
+                ev = dev.read_one()
+            except Exception:
+                finish(None)
+                return False
+            while ev is not None:
+                if ev.type == ecodes.EV_KEY:
+                    if ev.code in mods:
+                        if ev.value == 1:
+                            held.add(ev.code)
+                        elif ev.value == 0:
+                            held.discard(ev.code)
+                    elif ev.value == 1:
+                        main = name_of(ev.code)
+                        if main:
+                            # 修饰键按固定顺序排,免得同一个组合有多种写法
+                            order = {n: i for i, n in enumerate(MOD_ORDER)}
+                            names = sorted(
+                                (n for n in (name_of(c) for c in held) if n),
+                                key=lambda n: order.get(n, 99))
+                            finish("+".join([*names, main]))
+                            return False
+                ev = dev.read_one()
+            return True
+
+        def tick() -> bool:
+            if state["done"]:
+                return False
+            state["left"] -= 1
+            if state["left"] <= 0:
+                self.status.set_markup(
+                    f'<span size="small">{_esc(t("settings.hotkey_capture_none"))}</span>')
+                finish(None)
+                return False
+            self.status.set_markup(
+                f'<span size="small">● '
+                f'{_esc(t("settings.hotkey_capture_wait") % state["left"])}</span>')
+            return True
+
+        self.status.set_markup(
+            f'<span size="small">● '
+            f'{_esc(t("settings.hotkey_capture_wait") % state["left"])}</span>')
+        self.GLib.timeout_add(30, poll)
+        self.GLib.timeout_add(1000, tick)
 
     def _page_perf(self) -> None:
         Gtk = self.Gtk
@@ -261,6 +578,15 @@ class SettingsDialog:
         self._row(box, "", btn, t("settings.open_config_hint"))
 
     # ── 回调 ────────────────────────────────────────────────────────
+
+    def _error_dialog(self, title: str, detail: str) -> None:
+        Gtk = self.Gtk
+        dlg = Gtk.MessageDialog(
+            transient_for=self.win, modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.CLOSE, text=title, secondary_text=detail)
+        dlg.run()
+        dlg.destroy()
 
     def _stage(self, section: str, key: str, value, needs_restart: bool) -> None:  # noqa: ANN001
         """把一处改动记下来,但**先不写盘**。点「保存」才真正落地。"""
@@ -357,6 +683,11 @@ class SettingsDialog:
                 pass
         self._notify_daemon()
 
+        # 快捷键改了要真的去 GNOME 绑一下 —— 光写配置文件不会生效
+        if ("shortcut", "accel") in self.pending or \
+                ("shortcut", "enabled") in self.pending:
+            self._apply_shortcut()
+
         if ("ui", "language") in self.pending:
             set_language(str(self.pending[("ui", "language")]))
         needs_restart = bool(self.pending_restart)
@@ -384,6 +715,23 @@ class SettingsDialog:
         else:
             self.status.set_markup(
                 f'<span size="small" alpha="60%">{_esc(t("settings.saved"))}</span>')
+
+    def _apply_shortcut(self) -> None:
+        """把配置里的桌面快捷键真正绑到 GNOME 上(或解绑)。"""
+        import shutil
+
+        from .config import load_config as _load
+        from .hotkey_conflict import bind_shortcut
+
+        cfg = _load()
+        exe = shutil.which("vibevibe") or "vibevibe"
+        if cfg.shortcut.enabled:
+            ok = bind_shortcut(cfg.shortcut.accel, f"{exe} toggle")
+        else:
+            ok = bind_shortcut("", f"{exe} toggle")   # 空绑定 = 停用
+        if not ok:
+            self.status.set_markup(
+                f'<span size="small">✗ {_esc(t("settings.shortcut_bind_failed"))}</span>')
 
     def on_cancel(self, _btn=None) -> None:  # noqa: ANN001
         """直接关掉。因为什么都没写盘,所以不需要"撤销"——本来就没发生过。"""

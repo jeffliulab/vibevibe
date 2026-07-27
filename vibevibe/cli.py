@@ -81,7 +81,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         ("状态", "state"), ("后端", "backend"), ("进程号", "pid"),
         ("配置文件", "config"), ("热键通道", "hotkey"),
         ("模型在内存", "model_in_memory"), ("占用内存MB", "memory_mb"),
-        ("当前已录", "recording_sec"), ("上次时长", "last_duration_sec"),
+        ("当前已录", "recording_sec"), ("上次来源", "last_source"),
+        ("上次时长", "last_duration_sec"),
         ("上次 RTF", "last_rtf"), ("上次结果", "last_text"),
         ("上次错误", "last_error"),
     ]
@@ -229,6 +230,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"  ! hotkey.device 当前不存在: {cfg.hotkey.device}(设备没插上?)")
         else:
             print(f"  ✓ hotkey.device {cfg.hotkey.device}")
+        try:
+            from .hotkey_conflict import check as check_conflicts
+
+            for c in check_conflicts(cfg.hotkey.key):
+                problems += 1 if c.blocker else 0
+                mark = "✗" if c.blocker else "!"
+                print(f"  {mark} 触发键冲突: {c.title}")
+                for line in c.detail.splitlines():
+                    print(f"      {line}")
+            else:
+                if not check_conflicts(cfg.hotkey.key):
+                    print(f"  ✓ 触发键 {cfg.hotkey.key} 无冲突")
+        except Exception as exc:
+            print(f"  · 冲突检查跳过: {exc}")
+
         if cfg.hotkey.grab:
             print(f"  ! hotkey.grab = true —— 只应对专用小键盘开启"
                   f"(安全闸: 按键数 > {cfg.hotkey.grab_max_keys} 会拒绝独占)")
@@ -257,7 +273,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "setup", help="安装向导:权重、配置、快捷键、开机自启(装完 pip 先跑这个)")
     p.add_argument("-y", "--yes", action="store_true", help="全部默认同意,不逐步询问")
-    p.add_argument("--key", default="Pause", help="绑哪个键触发听写(默认 Pause)")
+    p.add_argument("--key", default="<Super><Shift>v",
+                   help="桌面快捷键绑哪个组合(默认 <Super><Shift>v)")
     p.add_argument("--skip-weights", action="store_true", help="不下载模型权重")
     p.add_argument("--skip-hotkey", action="store_true", help="不绑快捷键")
     p.add_argument("--skip-service", action="store_true", help="不装 systemd 服务")

@@ -225,7 +225,12 @@ def step_weights(cfg: Config, auto_yes: bool) -> bool:
 
 
 def step_hotkey(key: str, auto_yes: bool) -> bool:
-    """绑 GNOME 快捷键。"""
+    """绑桌面快捷键。
+
+    这条通道**不需要任何权限**,也不需要专用硬件 —— 是 pip 装完之后
+    立刻能用的那条路。小键盘那条(evdev 直读 KEY_F19)需要 udev 规则,
+    是可选的加强项。
+    """
     if not shutil.which("gsettings"):
         _say("  · 没有 gsettings(不是 GNOME?),跳过。")
         _say("    自己在桌面环境里绑一个快捷键,执行:")
@@ -241,6 +246,9 @@ def step_hotkey(key: str, auto_yes: bool) -> bool:
 
     command = f"{_vibevibe_bin()} toggle"
     _say(f"  按键     {key}")
+    _say("  说明     应用程序基本不碰 Super 键(它是桌面环境的保留键),")
+    _say("           所以 Super 系组合最不容易撞车。Ctrl+Shift+V 看着顺手,")
+    _say("           但它在浏览器/VS Code/终端里都是「粘贴为纯文本」。")
     _say(f"  执行     {command}")
     _say("  手感     按一下开始录,再按一下停止并出字(GNOME 感知不到松手,")
     _say("           所以是 toggle 而不是按住说话)")
@@ -407,7 +415,7 @@ def step_tray(auto_yes: bool) -> bool:
 
 def run_setup(
     auto_yes: bool = False,
-    key: str = "Pause",
+    key: str = "<Super><Shift>v",
     skip_weights: bool = False,
     skip_hotkey: bool = False,
     skip_service: bool = False,

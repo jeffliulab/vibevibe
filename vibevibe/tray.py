@@ -171,9 +171,9 @@ class Tray:
         self.item_settings.connect("activate", self.on_settings)
         menu.append(self.item_settings)
 
-        item_log = Gtk.MenuItem(label=t("tray.open_log"))
-        item_log.connect("activate", self.on_open_log)
-        menu.append(item_log)
+        item_about = Gtk.MenuItem(label=t("tray.about"))
+        item_about.connect("activate", self.on_about)
+        menu.append(item_about)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -268,12 +268,32 @@ class Tray:
         self._refresh()
         return False  # 只跑一次
 
-    def on_settings(self, _item) -> None:  # noqa: ANN001
-        from .settings_dialog import SettingsDialog
+    def _error_dialog(self, title: str, detail: str) -> None:
+        """把异常摆到用户面前。
 
-        # 设置窗口关掉之后语言可能变了,菜单文案得跟着重建
-        dlg = SettingsDialog(load_config(), (self.Gtk, self.GLib))
-        dlg.win.connect("destroy", lambda _w: self._reload_language())
+        托盘通常是 nohup 起的,stderr 进了黑洞 —— 菜单点了没反应而没有
+        任何提示,是最难查的一类故障(实际发生过:托盘跑着旧代码,
+        新配置项它不认识,load_config 抛异常,点「设置」就是没反应)。
+        """
+        Gtk = self.Gtk
+        dlg = Gtk.MessageDialog(
+            modal=True, message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.CLOSE, text=title, secondary_text=detail)
+        dlg.run()
+        dlg.destroy()
+
+    def on_settings(self, _item) -> None:  # noqa: ANN001
+        try:
+            from .settings_dialog import SettingsDialog
+
+            # 设置窗口关掉之后语言可能变了,菜单文案得跟着重建
+            dlg = SettingsDialog(load_config(), (self.Gtk, self.GLib))
+            dlg.win.connect("destroy", lambda _w: self._reload_language())
+        except Exception as exc:
+            self._error_dialog(
+                t("tray.settings_failed"),
+                f"{type(exc).__name__}: {exc}\n\n"
+                + t("tray.stale_hint"))
 
     def _reload_language(self) -> None:
         cfg = load_config()
@@ -294,12 +314,129 @@ class Tray:
         else:
             subprocess.Popen(["xdg-open", str(self.cfg.log_path)])
 
+    def on_about(self, _item) -> None:  # noqa: ANN001
+        """关于窗口:版本 + 关键路径 + 日志入口。
+
+        日志入口放这儿而不是菜单里 —— 菜单该只放**常用**的东西
+        (两个开关 + 设置),看日志是排查时才做的事,归到关于里更合适。
+        """
+        try:
+            self._about_dialog()
+        except Exception as exc:
+            self._error_dialog(t("about.title"), f"{type(exc).__name__}: {exc}")
+
+    def _about_dialog(self) -> None:
+        from . import __version__
+        from .config import USER_CONFIG_PATH, data_root, is_source_checkout
+
+        Gtk = self.Gtk
+        cfg = load_config()
+
+        win = Gtk.Window(title=t("about.title"))
+        win.set_default_size(480, 300)
+        win.set_position(Gtk.WindowPosition.CENTER)
+        win.set_modal(True)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        outer.set_margin_top(18)
+        outer.set_margin_bottom(14)
+        outer.set_margin_start(20)
+        outer.set_margin_end(20)
+        win.add(outer)
+
+        # 图标 + 标题
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        icon_path = Path(__file__).resolve().parent / "data" / "icons" / "vibevibe-idle.svg"
+        if icon_path.exists():
+            try:
+                from gi.repository import GdkPixbuf
+
+                pix = GdkPixbuf.Pixbuf.new_from_file_at_size(str(icon_path), 56, 56)
+                head.pack_start(Gtk.Image.new_from_pixbuf(pix), False, False, 0)
+            except Exception:
+                pass
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        name = Gtk.Label()
+        name.set_markup(f'<span size="x-large" weight="bold">vibevibe {__version__}</span>')
+        name.set_xalign(0.0)
+        title_box.pack_start(name, False, False, 0)
+        desc = Gtk.Label()
+        desc.set_markup(f'<span alpha="70%">{_esc(t("about.desc"))}</span>')
+        desc.set_xalign(0.0)
+        desc.set_line_wrap(True)
+        title_box.pack_start(desc, False, False, 0)
+        head.pack_start(title_box, True, True, 0)
+        outer.pack_start(head, False, False, 0)
+
+        outer.pack_start(Gtk.Separator(), False, False, 14)
+
+        # 关键信息表
+        grid = Gtk.Grid()
+        grid.set_column_spacing(14)
+        grid.set_row_spacing(6)
+        rows = [
+            (t("about.runmode"),
+             t("about.mode_dev") if is_source_checkout() else t("about.mode_pip")),
+            (t("about.backend"), cfg.asr.backend),
+            (t("about.config"), str(cfg.source_path or USER_CONFIG_PATH)),
+            (t("about.data"), str(data_root())),
+            (t("about.log"), str(cfg.log_path)),
+        ]
+        for i, (k, v) in enumerate(rows):
+            kl = Gtk.Label()
+            kl.set_markup(f'<span alpha="60%">{_esc(k)}</span>')
+            kl.set_xalign(0.0)
+            kl.set_valign(Gtk.Align.START)
+            grid.attach(kl, 0, i, 1, 1)
+            vl = Gtk.Label(label=v)
+            vl.set_xalign(0.0)
+            vl.set_selectable(True)      # 路径要能选中复制
+            vl.set_line_wrap(True)
+            vl.set_max_width_chars(46)
+            grid.attach(vl, 1, i, 1, 1)
+        outer.pack_start(grid, True, True, 0)
+
+        # 底部按钮
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        bar.set_margin_top(16)
+
+        btn_log = Gtk.Button(label=t("about.view_log"))
+        btn_log.connect("clicked", lambda _b: self.on_open_log(None))
+        bar.pack_start(btn_log, False, False, 0)
+
+        btn_cfg = Gtk.Button(label=t("about.open_config"))
+        btn_cfg.connect("clicked", lambda _b: self._open_path(
+            USER_CONFIG_PATH if USER_CONFIG_PATH.exists() else cfg.source_path))
+        bar.pack_start(btn_cfg, False, False, 0)
+
+        btn_web = Gtk.Button(label=t("about.project"))
+        btn_web.connect("clicked", lambda _b: subprocess.Popen(
+            ["xdg-open", "https://github.com/jeffliulab/vibevibe"]))
+        bar.pack_start(btn_web, False, False, 0)
+
+        btn_close = Gtk.Button(label=t("about.close"))
+        btn_close.connect("clicked", lambda _b: win.destroy())
+        bar.pack_end(btn_close, False, False, 0)
+
+        outer.pack_start(bar, False, False, 0)
+        win.show_all()
+
+    def _open_path(self, path) -> None:  # noqa: ANN001
+        if path:
+            subprocess.Popen(["xdg-open", str(path)])
+
     def on_quit(self, _item) -> None:  # noqa: ANN001
         self.Gtk.main_quit()
 
     def run(self) -> int:
         self.Gtk.main()
         return 0
+
+
+def _esc(text: str) -> str:
+    from html import escape
+
+    return escape(text)
 
 
 def _which(name: str) -> str | None:

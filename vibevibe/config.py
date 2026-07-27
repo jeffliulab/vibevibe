@@ -289,18 +289,43 @@ class HotkeyConfig:
     # (event 号在重新插拔后会变)
     device: str = ""
     # evdev 键名。KEY_F19 对应 evdev code 189。
+    #
+    # 默认固定 F19 是为了**对应两键小键盘的左键**:小键盘的固件里也烧成
+    # F19,这样换任何一台电脑插上去都能直接用,不依赖电脑上的软件改键。
+    #
+    # 为什么是 F19 而不是 F13:实测这台机器的 X11 布局里,F13~F18 被映射成
+    # XF86Tools / XF86Launch5~9,F20~F23 是音量和触摸板键 —— 十二个里只有
+    # F19 和 F24 没有 keysym。没有 keysym 意味着漏给应用也不会有任何反应,
+    # 这在「不能独占设备」的前提下是决定性的。
     key: str = "KEY_F19"
     # hold:按住录、松开转写(专用键推荐)
     # toggle:按一下开始、再按一下停
     mode: str = "hold"
-    # 是否独占设备(EVIOCGRAB)。独占后按键完全不会漏进当前窗口。
-    # **只能对专用小键盘开启**;对主键盘开启会吃掉你所有输入。
+    # 是否独占设备(EVIOCGRAB)。
+    #
+    # ⚠️ **独占是整设备级的,不能只独占某一个键。**
+    # 所以「一个键触发听写 + 一个键透传回车」这种两键布局**必须关掉它**——
+    # 独占了 event 节点,右键的 Enter 也一起被吞,永远送不到你正在打字的窗口。
+    #
+    # 实测下来这也不构成问题:F19 在 X11 默认布局里没有 keysym
+    # (这台机器上 keycode 197 是空的),漏给应用不会有任何反应。
+    # 当初为「不跟别的快捷键冲突」选 F19,顺带解决了「不能独占」。
+    #
+    # 什么情况下才该开:整个设备上的每一个键都由 vibevibe 消费,
+    # 没有任何键需要透传给别的程序。
     grab: bool = False
     # 设备不存在或被拔掉后的重连间隔
     reconnect_interval_sec: float = 2.0
-    # 安全闸:开启 grab 时,如果设备的按键数超过这个值就拒绝独占,
-    # 避免误配到主键盘上把整台机器的输入吞掉
-    grab_max_keys: int = 8
+    # 安全闸:开启 grab 时,设备名必须包含这个字符串,否则拒绝独占。
+    #
+    # 为什么不用「按键数量」当判据(原来就是这么写的,实测证明是错的):
+    # QMK 系固件不管物理上几个键,都会声明整个键位范围。实测这块
+    # 两键小键盘声明了 279 个键,比主键盘(143)还多 —— 数量根本
+    # 区分不出主键盘,那个闸给的是虚假的安全感。
+    #
+    # 设备名匹配挡的是真实风险:by-id 路径在换硬件后指向了别的设备。
+    # 留空 = 不做名字校验(不推荐)。
+    grab_expect_name: str = ""
 
 
 @dataclass
@@ -312,6 +337,32 @@ class UiConfig:
     """
 
     language: str = "zh"   # zh | en
+
+
+@dataclass
+class ShortcutConfig:
+    """桌面快捷键通道 —— 不需要专用小键盘也能用。
+
+    跟 [hotkey] 那条 evdev 直读通道的分工:
+
+        [hotkey]    固定 KEY_F19,对应两键小键盘的左键。
+                    需要 udev 规则,但只针对那一个小键盘。
+        [shortcut]  桌面快捷键,**零权限**,任何人 pip 装完就能用。
+                    GNOME 会把它抢下来,所以不会漏给当前应用。
+
+    两条通道同时生效,互不干扰 —— 有小键盘就用小键盘,没有就用快捷键。
+
+    默认值 <Super><Shift>v 是实测选的,不是随手挑的:
+      · 应用程序基本不碰 Super 键(它是桌面环境的保留键),
+        所以 Super 系组合几乎不会跟应用撞车
+      · Ctrl+Shift+V 看着顺手,但在浏览器/VSCode/终端里全都是
+        「粘贴为纯文本」—— 这类冲突 gsettings 查不出来,用起来天天撞
+      · Super+V 本身被 GNOME 占了(toggle-message-tray),所以要加 Shift
+    """
+
+    enabled: bool = True
+    # GNOME 加速器写法。改这个要重新绑定(设置界面里会自动做)。
+    accel: str = "<Super><Shift>v"
 
 
 @dataclass
@@ -362,6 +413,7 @@ class Config:
     sound: SoundConfig = field(default_factory=SoundConfig)
     inject: InjectConfig = field(default_factory=InjectConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
+    shortcut: ShortcutConfig = field(default_factory=ShortcutConfig)
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
 

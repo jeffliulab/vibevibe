@@ -68,7 +68,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "缺少注入工具 %s,识别出来的文字将无法打进光标处。装一下: sudo apt install %s",
         "Missing injection tools %s; transcribed text cannot be typed at the cursor. "
         "Install with: sudo apt install %s"),
-    "daemon.rec_start": _m("开始录音", "Recording started"),
+    "daemon.rec_start": _m("开始录音 [来源: %s]", "Recording started [via %s]"),
+    "daemon.src_hotkey": _m("小键盘 %s", "keypad %s"),
+    "daemon.src_ipc": _m("快捷键/命令行", "shortcut/CLI"),
     "daemon.rec_start_failed": _m("开始录音失败: %s", "Failed to start recording: %s"),
     "daemon.rec_stop_failed": _m("停止录音失败: %s", "Failed to stop recording: %s"),
     "daemon.rec_too_short": _m("录音为空或过短,忽略", "Recording empty or too short, ignored"),
@@ -158,8 +160,30 @@ MESSAGES: dict[str, dict[str, str]] = {
     "tray.service": _m("服务", "Service"),
     "tray.hot_reload": _m("热加载(模型常驻内存)", "Hot reload (keep model in memory)"),
     "tray.settings": _m("设置…", "Settings…"),
-    "tray.open_log": _m("查看日志", "View log"),
+    "tray.about": _m("关于 vibevibe…", "About vibevibe…"),
+    "about.title": _m("关于 vibevibe", "About vibevibe"),
+    "about.desc": _m("本地中英混说语音听写 —— 说一下,按一下。",
+                     "Offline Chinese-English code-switching dictation."),
+    "about.version": _m("版本", "Version"),
+    "about.runmode": _m("运行方式", "Running from"),
+    "about.mode_dev": _m("源码目录(可编辑安装)", "source checkout (editable install)"),
+    "about.mode_pip": _m("pip 已安装", "pip install"),
+    "about.backend": _m("识别后端", "Backend"),
+    "about.config": _m("配置文件", "Config"),
+    "about.data": _m("数据目录", "Data"),
+    "about.log": _m("日志", "Log"),
+    "about.view_log": _m("查看日志", "View log"),
+    "about.open_config": _m("打开配置文件", "Open config"),
+    "about.project": _m("项目主页", "Project page"),
+    "about.close": _m("关闭", "Close"),
+    "about.log_missing": _m("日志文件还不存在", "Log file does not exist yet"),
     "tray.quit": _m("退出托盘(不影响服务)", "Quit tray (service keeps running)"),
+    "tray.settings_failed": _m("打不开设置窗口", "Cannot open Settings"),
+    "tray.stale_hint": _m(
+        "如果托盘是在配置结构变更之前启动的,它内存里还是旧代码。"
+        "重启托盘试试:退出托盘后重新运行 vibevibe tray",
+        "If the tray was started before a config-schema change, it is running "
+        "stale code. Restart it: quit the tray, then run `vibevibe tray` again."),
     "tray.refresh_error": _m("[tray] 刷新出错: %s", "[tray] Refresh error: %s"),
     "tray.service_failed": _m("[tray] 服务操作失败: %s", "[tray] Service operation failed: %s"),
     "tray.hot_failed": _m("[tray] 切换热加载失败: %s", "[tray] Failed to toggle hot reload: %s"),
@@ -169,7 +193,86 @@ MESSAGES: dict[str, dict[str, str]] = {
     "settings.tab_general": _m("常规", "General"),
     "settings.tab_perf": _m("性能", "Performance"),
     "settings.tab_feedback": _m("反馈", "Feedback"),
+    "settings.tab_keys": _m("按键", "Keys"),
     "settings.tab_advanced": _m("高级", "Advanced"),
+
+    "settings.hotkey_enabled": _m("启用小键盘通道", "Enable keypad channel"),
+    "settings.hotkey_enabled_hint": _m(
+        "直接读输入设备,所以能用 F13~F24 这类在桌面环境里绑不了的键。"
+        "需要 udev 规则给设备放权限。",
+        "Reads the input device directly, so it can use keys like F13–F24 that "
+        "desktop shortcuts cannot bind. Requires a udev rule for device access."),
+    "settings.hotkey_device": _m("设备", "Device"),
+    "settings.hotkey_device_hint": _m(
+        "只列出 /dev/input/by-id/ 下的稳定路径 —— eventN 那种编号重新插拔后会变。",
+        "Only stable /dev/input/by-id/ paths are listed — eventN numbers change "
+        "when you replug."),
+    "settings.hotkey_key": _m("触发键", "Trigger key"),
+    "settings.hotkey_capture": _m("按下捕获", "Press to capture"),
+    "settings.hotkey_capture_wait": _m("请按小键盘上的键…(%d 秒)",
+                                       "Press a key on the keypad… (%ds)"),
+    "settings.hotkey_capture_got": _m("捕获到 %s", "Captured %s"),
+    "settings.hotkey_capture_none": _m("没捕获到按键", "No key captured"),
+    "settings.hotkey_capture_err": _m("捕获失败:%s", "Capture failed: %s"),
+    "settings.hotkey_key_hint": _m(
+        "点「按下捕获」再按你想用的键,支持组合键(按住 Ctrl 再按 V 会抓成 "
+        "KEY_LEFTCTRL+KEY_V)。\n"
+        "⚠ 但组合键**会同时送给当前应用** —— 绑成 Ctrl+V 的话,按一下既触发听写、"
+        "又真的粘贴一次。推荐用 F13~F24:它们在 X11 默认布局里没有 keysym,"
+        "不跟任何东西冲突,漏过去也等于什么都没发生。",
+        "Click \u201cPress to capture\u201d then press your key. Combos work "
+        "(hold Ctrl, press V \u2192 KEY_LEFTCTRL+KEY_V).\n"
+        "\u26a0 But a combo **also reaches the focused app** \u2014 binding Ctrl+V "
+        "means every trigger also pastes. F13\u2013F24 are recommended: they have no "
+        "keysym in the default X11 layout, so they clash with nothing and are "
+        "harmless if they leak through."),
+    "settings.hotkey_mode": _m("触发方式", "Trigger mode"),
+    "settings.hotkey_mode_hint": _m(
+        "「按住说话」只对小键盘生效 —— 桌面快捷键那条路走 GNOME,"
+        "而 GNOME 只能感知按下、感知不到松手,所以它永远是 toggle。",
+        "\u201cHold to talk\u201d applies to the keypad only. The desktop-shortcut "
+        "path goes through GNOME, which can detect key-press but not key-release, "
+        "so it is always toggle."),
+    "settings.sec_keypad": _m("小键盘（专用硬件）", "Keypad (dedicated hardware)"),
+    "settings.sec_shortcut": _m("桌面快捷键（不需要硬件）", "Desktop shortcut (no hardware)"),
+    "settings.shortcut_enabled": _m("启用桌面快捷键", "Enable desktop shortcut"),
+    "settings.shortcut_hint": _m(
+        "不需要专用小键盘、不需要任何权限,pip 装完就能用。"
+        "GNOME 会把这个组合抢下来,所以不会漏给当前应用。",
+        "No dedicated hardware, no special permissions — works right after "
+        "pip install. GNOME grabs the combo, so it never leaks to the focused app."),
+    "settings.shortcut_accel": _m("快捷键", "Shortcut"),
+    "settings.shortcut_accel_hint": _m(
+        "默认 Super+Shift+V。为什么不用 Ctrl+Shift+V:那在浏览器、VS Code、"
+        "终端里都是「粘贴为纯文本」—— 这类应用内部的占用,系统层查不出来。"
+        "应用基本不碰 Super 键(它是桌面环境的保留键),所以 Super 系最安全。",
+        "Default: Super+Shift+V. Why not Ctrl+Shift+V — that is \u201cpaste as "
+        "plain text\u201d in browsers, VS Code and terminals, and such in-app "
+        "bindings are invisible to a system-level check. Applications rarely "
+        "touch Super (it belongs to the desktop), so Super combos are safest."),
+    "settings.shortcut_capture": _m("按下捕获", "Press to capture"),
+    "settings.shortcut_bound": _m("已绑定 %s", "Bound to %s"),
+    "settings.shortcut_bind_failed": _m("绑定失败", "Binding failed"),
+    "settings.keypad_fixed_hint": _m(
+        "固定用 F19,对应两键小键盘的左键 —— 小键盘固件里也烧成 F19,"
+        "换任何一台电脑插上都能直接用。想换键请用「按下捕获」。",
+        "Fixed to F19, matching the left key of the two-key macropad — the "
+        "firmware is flashed with F19 too, so it works on any machine. "
+        "Use \u201cPress to capture\u201d to change it."),
+    "settings.conflict_title": _m("这个键有冲突", "This key conflicts"),
+    "settings.conflict_blocked": _m(
+        "%s 不能用作触发键,改动没有生效。", "%s cannot be used; the change was discarded."),
+    "settings.conflict_warn": _m("%s 可以用,但有副作用:", "%s works, but has a side effect:"),
+    "settings.conflict_ok": _m("✓ %s 没有冲突", "✓ %s has no conflicts"),
+    "settings.conflict_suggest": _m(
+        "当前布局下这几个键是干净的:%s", "These keys are clean in your layout: %s"),
+    "settings.hotkey_mode_toggle": _m("按一下开始、再按一下停 (toggle)",
+                                      "Press to start, press again to stop (toggle)"),
+    "settings.hotkey_mode_hold": _m("按住说话、松手转写 (hold)",
+                                    "Hold to talk, release to transcribe (hold)"),
+    "settings.hotkey_no_device": _m("(没找到输入设备)", "(no input device found)"),
+    "settings.hotkey_needs_restart": _m(
+        "按键设置改完要重启服务才生效。", "Key settings need a service restart."),
 
     "settings.language": _m("界面与日志语言", "Interface & log language"),
     "settings.language_hint": _m(

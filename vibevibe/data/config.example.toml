@@ -217,6 +217,25 @@ type_tool = "xdotool"
 type_delay_ms = 12
 
 
+[shortcut]
+# 桌面快捷键通道 —— **不需要专用硬件,不需要任何权限**,pip 装完就能用。
+#
+# 跟下面 [hotkey] 那条 evdev 直读通道的分工:
+#   [shortcut]  桌面快捷键,零权限。GNOME 会把组合抢下来,不会漏给当前应用
+#   [hotkey]    固定 KEY_F19,对应两键小键盘的左键,需要给那个设备配 udev 规则
+# 两条同时生效,互不干扰。
+enabled = true
+
+# 默认 <Super><Shift>v 是实测选的:
+#   · 应用程序基本不碰 Super 键(它是桌面环境的保留键),所以 Super 系
+#     组合几乎不会跟应用撞车
+#   · Ctrl+Shift+V 看着更顺手,但它在浏览器 / VS Code / 终端里都是
+#     「粘贴为纯文本」—— 这类**应用内部**的占用,系统层的 gsettings
+#     根本查不出来,用起来天天撞
+#   · Super+V 本身被 GNOME 占了(toggle-message-tray),所以要加 Shift
+accel = "<Super><Shift>v"
+
+
 [hotkey]
 # F19 通道(专用小键盘)。需要 udev 规则给权限,见 config/70-vibevibe.rules.example。
 # 组合键通道不需要开这个——那条走 GNOME 快捷键 → `vibevibe toggle`。
@@ -235,13 +254,23 @@ key = "KEY_F19"
 # toggle:按一下开始、再按一下停
 mode = "hold"
 
-# 独占设备(EVIOCGRAB)。独占后按键完全不会漏进当前窗口。
-# **只能对专用小键盘开**。独占是整个设备的,对主键盘开会吃掉你所有输入。
+# 独占设备(EVIOCGRAB)。
+#
+# ⚠️ 独占是**整设备级**的,不能只独占某一个键。所以
+# 「左键触发听写 + 右键透传回车」这种两键布局**必须关掉它** ——
+# 独占了 event 节点,右键的 Enter 也一起被吞,送不到你正在打字的窗口。
+#
+# 关着也没关系:F19 在 X11 默认布局里没有 keysym,漏给应用不会有任何反应。
 grab = false
 
-# 安全闸:开 grab 时,设备按键数超过这个值就拒绝独占。
-# 防止配置写错把主键盘吞了。
-grab_max_keys = 8
+# 安全闸:开 grab 时,设备名必须包含这个字符串,否则拒绝独占。
+#
+# 为什么不用「按键数量」当判据(原来就是这么写的,实测证明是错的):
+# QMK 系固件不管物理几个键都声明整个键位范围。实测这块两键小键盘
+# 声明了 279 个键,比主键盘(143)还多 —— 数量区分不出主键盘。
+#
+# 名字匹配挡的是真实风险:by-id 路径在换硬件后指向了别的设备。
+grab_expect_name = "T TYPEKEY Z2"
 
 reconnect_interval_sec = 2.0
 
