@@ -177,7 +177,18 @@ MESSAGES: dict[str, dict[str, str]] = {
     "about.project": _m("项目主页", "Project page"),
     "about.close": _m("关闭", "Close"),
     "about.log_missing": _m("日志文件还不存在", "Log file does not exist yet"),
-    "tray.quit": _m("退出托盘(不影响服务)", "Quit tray (service keeps running)"),
+    "tray.quit": _m("退出托盘(服务继续运行)", "Quit tray (service keeps running)"),
+    "tray.quit_all": _m("退出 vibevibe(停止服务)", "Quit vibevibe (stop service)"),
+    "tray.quit_confirm_title": _m("退出 vibevibe?", "Quit vibevibe?"),
+    "tray.quit_confirm_body": _m(
+        "守护进程会被停掉,内存全部还给系统;托盘图标也会消失,"
+        "听写快捷键随之失效。\n\n"
+        "下次登录会自动回来。想现在就开回来,运行:vibevibe tray",
+        "The daemon will be stopped and all its memory returned to the system. "
+        "The tray icon disappears and dictation stops working.\n\n"
+        "It comes back automatically at your next login. To bring it back now, "
+        "run: vibevibe tray"),
+    "tray.quit_failed": _m("守护进程没能停干净", "The daemon did not stop cleanly"),
     "tray.settings_failed": _m("打不开设置窗口", "Cannot open Settings"),
     "tray.stale_hint": _m(
         "如果托盘是在配置结构变更之前启动的,它内存里还是旧代码。"

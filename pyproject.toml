@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vibevibe"
-version = "0.2.0"
+version = "0.2.1"
 description = "本地中英混说语音听写 —— 说一下,按一下"
 requires-python = ">=3.11"
 readme = "README.md"

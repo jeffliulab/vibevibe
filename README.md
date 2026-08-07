@@ -202,7 +202,14 @@ Two switches:
 
 The menu also has **About**, which shows the version, the paths in use, and a button to open the log.
 
-> The tray is a **separate process** from the daemon. It has to be — otherwise "stop the service" would kill the very thing you use to start it again.
+Two quit entries — do not mix them up:
+
+| Menu entry | What it does |
+| --- | --- |
+| **Quit tray (service keeps running)** | Closes the tray icon only. The daemon stays up and dictation keeps working |
+| **Quit vibevibe (stop service)** | Stops the daemon *and* the tray, returning all memory to the system. It comes back at your next login; to bring it back now, run `vibevibe tray` |
+
+> The tray is a **separate process** from the daemon. It has to be — otherwise "stop the service" would kill the very thing you use to start it again. And because they are two processes, quitting the whole program has to stop both explicitly.
 
 ### Settings
 
@@ -228,6 +235,7 @@ vibevibe devices     # list microphones and keyboard devices
 vibevibe settings    # open the settings window
 vibevibe tray        # start the tray icon
 vibevibe daemon      # run the daemon in the foreground, for debugging
+vibevibe quit        # quit: stop the service and the daemon (the tray closes separately)
 ```
 
 The daemon normally runs under systemd:
@@ -235,6 +243,7 @@ The daemon normally runs under systemd:
 ```bash
 systemctl --user status vibevibe
 journalctl --user -u vibevibe -f
+systemctl --user disable vibevibe   # stop it from starting at login
 ```
 
 ---
@@ -276,6 +285,7 @@ vibevibe/
   inject.py           puts text at the cursor
   sound.py            audio cues, synthesized — no asset files
   tray.py             system tray icon
+  service.py          systemd user-service control, and "stop vibevibe entirely"
   settings_dialog.py  GTK settings window
   setup_wizard.py     `vibevibe setup`
   i18n.py             English / Chinese strings

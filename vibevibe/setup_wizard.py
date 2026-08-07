@@ -36,6 +36,7 @@ from .config import (
     is_source_checkout,
     load_config,
 )
+from .service import SERVICE as SERVICE_NAME
 
 # GNOME 自定义快捷键存放的 dconf 路径
 GNOME_KEYS_SCHEMA = "org.gnome.settings-daemon.plugins.media-keys"
@@ -43,8 +44,6 @@ GNOME_CUSTOM_PATH = (
     "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/vibevibe/"
 )
 GNOME_CUSTOM_SCHEMA = f"{GNOME_KEYS_SCHEMA}.custom-keybinding:{GNOME_CUSTOM_PATH}"
-
-SERVICE_NAME = "vibevibe.service"
 
 
 # ── 小工具 ──────────────────────────────────────────────────────────────
@@ -338,6 +337,36 @@ def step_service(auto_yes: bool) -> bool:
     return True
 
 
+def _stale_autostart_exec(desktop: Path, want_exec: str) -> str | None:
+    """自启文件里的 Exec= 还指得到东西吗?指不到就把旧的那行还回来。
+
+    返回 None = 没问题(可以照旧跳过);返回字符串 = 那条已经失效的旧命令。
+
+    为什么需要这个:`.desktop` 里的 Exec= 是**绝对路径**(必须如此,自启时
+    的 PATH 跟终端不一样)。项目目录一改名、venv 一重建,这个文件就变成了
+    指向空气的死链接,而它还在那儿——只判断"文件存不存在"会一直报"已装",
+    托盘却再也起不来。这坑本机踩过一次:工作区从 8888-夏日大作战 改名成
+    8888-Projects 之后,自启文件在原地放了一整天没人发现。
+    """
+    try:
+        text = desktop.read_text(encoding="utf-8")
+    except OSError:
+        return "(读不出来)"
+
+    for line in text.splitlines():
+        if not line.startswith("Exec="):
+            continue
+        old = line[len("Exec="):].strip()
+        if old == want_exec:
+            return None
+        # 命令行不同不一定是坏的(用户可能自己加了参数),
+        # 但可执行文件本身不存在就一定是坏的
+        binary = old.split()[0] if old.split() else ""
+        return None if binary and Path(binary).exists() else (old or "(空)")
+
+    return "(没有 Exec= 这一行)"
+
+
 def step_tray(auto_yes: bool) -> bool:
     """装托盘图标的开机自启。
 
@@ -371,20 +400,31 @@ def step_tray(auto_yes: bool) -> bool:
     ) / "autostart"
     target = autostart / "vibevibe-tray.desktop"
 
-    if target.exists():
-        _say(f"  · 托盘自启已装: {target}")
-        return True
-
     exec_cmd = f"{_vibevibe_bin()} tray"
     icon = str(ICONS_DIR / "vibevibe-idle.svg")
-    _say(f"  自启文件 {target}")
-    _say(f"  启动命令 {exec_cmd}")
-    _say("  作用     顶栏出现一个 V 图标,里面两个开关:")
-    _say("           · 服务    —— 关掉 = 守护进程退出,内存全部还给系统")
-    _say("           · 热加载  —— 模型是否常驻内存(约 3.8GB vs 0.24GB)")
-    if not _ask("装上托盘自启?", auto_yes):
-        _say("  · 跳过。想手动开就跑: vibevibe tray")
-        return True
+
+    if target.exists():
+        stale = _stale_autostart_exec(target, exec_cmd)
+        if stale is None:
+            _say(f"  · 托盘自启已装: {target}")
+            return True
+        # 装过,但里面那条命令已经指向不存在的地方了 —— 项目目录改名 / 换了
+        # venv 都会这样。这时候光"已装"是骗人的:下次登录托盘根本起不来。
+        _say(f"  ! 托盘自启里的路径已失效: {target}")
+        _say(f"    旧: {stale}")
+        _say(f"    新: {exec_cmd}")
+        if not _ask("重写成新路径?", auto_yes):
+            _say("  · 跳过。托盘下次登录仍然起不来")
+            return True
+    else:
+        _say(f"  自启文件 {target}")
+        _say(f"  启动命令 {exec_cmd}")
+        _say("  作用     顶栏出现一个 V 图标,里面两个开关:")
+        _say("           · 服务    —— 关掉 = 守护进程退出,内存全部还给系统")
+        _say("           · 热加载  —— 模型是否常驻内存(约 3.8GB vs 0.24GB)")
+        if not _ask("装上托盘自启?", auto_yes):
+            _say("  · 跳过。想手动开就跑: vibevibe tray")
+            return True
 
     if not TRAY_DESKTOP_TEMPLATE.exists():
         _say(f"  ✗ 找不到模板: {TRAY_DESKTOP_TEMPLATE}")

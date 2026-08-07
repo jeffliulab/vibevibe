@@ -10,6 +10,10 @@
     vibevibe daemon     起守护进程(模型常驻在它内存里)
     vibevibe toggle     开始/停止录音 —— GNOME 快捷键绑的就是这条
 
+不想让它跑了:
+    vibevibe quit       停掉服务和守护进程,内存全部还给系统
+                        (托盘图标是独立进程,用它菜单里的「退出 vibevibe」)
+
 其余都是排查用的:
     vibevibe status     看守护进程在干嘛、上一句识别成了什么
     vibevibe devices    列出音频输入设备和输入(键盘)设备
@@ -122,6 +126,27 @@ def cmd_settings(args: argparse.Namespace) -> int:
     from .settings_dialog import main as settings_main
 
     return settings_main()
+
+
+def cmd_quit(args: argparse.Namespace) -> int:
+    """把 vibevibe 整个停掉:服务 + 守护进程。
+
+    和 `vibevibe shutdown` 的区别:shutdown 只发一条 IPC 让守护进程自己退,
+    而它一退,systemd 那边 `Restart=on-failure` 很可能几秒后又把它拉回来。
+    quit 是先停 unit 再兜底发 IPC,两条路都堵上。
+    """
+    from . import service
+
+    cfg = _load(args)
+    ok, notes = service.stop_all(cfg)
+
+    if args.json:
+        print(json.dumps({"ok": ok, "notes": notes}, ensure_ascii=False, indent=2))
+    else:
+        for note in notes:
+            print(f"  {note}")
+        print("vibevibe 已停止" if ok else "没能完全停下,详见上面")
+    return 0 if ok else 1
 
 
 def cmd_tray(args: argparse.Namespace) -> int:
@@ -297,10 +322,13 @@ def build_parser() -> argparse.ArgumentParser:
         ("stop", "停止录音并转写"),
         ("cancel", "放弃当前录音,不转写"),
         ("ping", "看守护进程还活着没"),
-        ("shutdown", "关闭守护进程"),
+        ("shutdown", "让守护进程自己退(systemd 可能几秒后拉回来,要彻底停用 quit)"),
     ):
         p = sub.add_parser(name, help=help_text)
         p.set_defaults(func=cmd_simple, command=name)
+
+    p = sub.add_parser("quit", help="退出 vibevibe:停掉服务和守护进程(托盘另外关)")
+    p.set_defaults(func=cmd_quit)
 
     p = sub.add_parser("status", help="查看守护进程状态和上次结果")
     p.set_defaults(func=cmd_status)

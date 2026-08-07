@@ -31,8 +31,7 @@ from pathlib import Path
 from . import ipc
 from .config import USER_CONFIG_PATH, Config, load_config
 from .i18n import set_language, t
-
-SERVICE = "vibevibe.service"
+from .service import SERVICE, is_active, is_installed, stop_all, systemctl
 
 # 状态 → 图标名。图标本身在 data/icons/ 里。
 ICON_OFF = "vibevibe-off"
@@ -95,26 +94,6 @@ def _import_gi():
     from gi.repository import GLib, Gtk
 
     return Gtk, GLib, appindicator
-
-
-def _systemctl(*args: str) -> tuple[bool, str]:
-    try:
-        p = subprocess.run(
-            ["systemctl", "--user", *args],
-            capture_output=True, text=True, timeout=20)
-        return p.returncode == 0, (p.stdout + p.stderr).strip()
-    except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"
-
-
-def _service_active() -> bool:
-    ok, out = _systemctl("is-active", SERVICE)
-    return ok and out.strip() == "active"
-
-
-def _service_installed() -> bool:
-    ok, _ = _systemctl("cat", SERVICE)
-    return ok
 
 
 class Tray:
@@ -181,6 +160,10 @@ class Tray:
         item_quit.connect("activate", self.on_quit)
         menu.append(item_quit)
 
+        item_quit_all = Gtk.MenuItem(label=t("tray.quit_all"))
+        item_quit_all.connect("activate", self.on_quit_all)
+        menu.append(item_quit_all)
+
         menu.show_all()
         self.indicator.set_menu(menu)
 
@@ -193,7 +176,7 @@ class Tray:
             return None
 
     def _refresh(self) -> None:
-        active = _service_active()
+        active = is_active()
         self.status = self._poll_daemon() if active else None
         st = self.status or {}
 
@@ -246,9 +229,9 @@ class Tray:
             return
         want = item.get_active()
         if want:
-            ok, out = _systemctl("start", SERVICE)
+            ok, out = systemctl("start", SERVICE)
         else:
-            ok, out = _systemctl("stop", SERVICE)
+            ok, out = systemctl("stop", SERVICE)
         if not ok:
             print(t("tray.service_failed") % out, file=sys.stderr)
         # 服务起停要点时间,稍后再刷新一次
@@ -305,7 +288,7 @@ class Tray:
 
     def on_open_log(self, _item) -> None:  # noqa: ANN001
         # 优先看 systemd 的日志(服务是它管的);它不在就退回文件
-        if _service_installed():
+        if is_installed():
             subprocess.Popen([
                 "x-terminal-emulator", "-e",
                 "journalctl --user -u vibevibe -f",
@@ -426,7 +409,40 @@ class Tray:
             subprocess.Popen(["xdg-open", str(path)])
 
     def on_quit(self, _item) -> None:  # noqa: ANN001
+        """只关托盘,守护进程照旧跑着。
+
+        留着它是有用的:托盘跑着旧代码时,「退出托盘 + 重新 vibevibe tray」
+        是最快的自救(见 tray.stale_hint)。但它不该是**唯一**的退出——
+        真正的「退出程序」是下面那个 on_quit_all。
+        """
         self.Gtk.main_quit()
+
+    def on_quit_all(self, _item) -> None:  # noqa: ANN001
+        """退出整个 vibevibe:停掉守护进程,再关掉托盘自己。
+
+        托盘是独立进程,所以「退出程序」必须显式做两件事——
+        只关托盘会留下一个还在占内存的守护进程,只停服务会留下一个
+        指着空气的托盘图标。
+        """
+        if not self._confirm(t("tray.quit_confirm_title"), t("tray.quit_confirm_body")):
+            return
+
+        ok, notes = stop_all(self.cfg)
+        if not ok:
+            self._error_dialog(t("tray.quit_failed"), "\n".join(notes))
+
+        # 无论守护进程停没停干净,托盘都得退——「退出」按下去必须真的退出,
+        # 否则就又回到了用户一开始遇到的那个问题。
+        self.Gtk.main_quit()
+
+    def _confirm(self, title: str, detail: str) -> bool:
+        Gtk = self.Gtk
+        dlg = Gtk.MessageDialog(
+            modal=True, message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL, text=title, secondary_text=detail)
+        answer = dlg.run()
+        dlg.destroy()
+        return answer == Gtk.ResponseType.OK
 
     def run(self) -> int:
         self.Gtk.main()

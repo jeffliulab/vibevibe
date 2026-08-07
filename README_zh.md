@@ -199,7 +199,14 @@ vibevibe setup
 
 菜单里还有**「关于」**，显示版本号、当前使用的各个路径，以及打开日志的按钮。
 
-> 托盘是**独立进程**，不是守护进程的一部分。必须如此——否则用托盘「关掉服务」会把托盘自己也关掉，再也没法打开。
+两个退出项，别点错：
+
+| 菜单项 | 做什么 |
+| --- | --- |
+| **退出托盘（服务继续运行）** | 只关托盘图标，守护进程照旧待命，听写快捷键仍然好用 |
+| **退出 vibevibe（停止服务）** | 守护进程和托盘一起退，内存全部还给系统；下次登录自动回来，想现在开回来就跑 `vibevibe tray` |
+
+> 托盘是**独立进程**，不是守护进程的一部分。必须如此——否则用托盘「关掉服务」会把托盘自己也关掉，再也没法打开。正因为是两个进程，「退出整个程序」才必须显式地把两边都停掉。
 
 ### 设置
 
@@ -225,6 +232,7 @@ vibevibe devices     # 列出麦克风和键盘设备
 vibevibe settings    # 打开设置窗口
 vibevibe tray        # 启动托盘图标
 vibevibe daemon      # 前台运行守护进程，调试用
+vibevibe quit        # 退出：停掉服务和守护进程（托盘另外关）
 ```
 
 守护进程平时由 systemd 管着：
@@ -232,6 +240,7 @@ vibevibe daemon      # 前台运行守护进程，调试用
 ```bash
 systemctl --user status vibevibe
 journalctl --user -u vibevibe -f
+systemctl --user disable vibevibe   # 不想让它开机自启了
 ```
 
 ---
@@ -273,6 +282,7 @@ vibevibe/
   inject.py           把文字送进光标处
   sound.py            提示音，现算的正弦波，不依赖音频文件
   tray.py             系统托盘图标
+  service.py          systemd 用户服务的操作，以及「把 vibevibe 整个停掉」
   settings_dialog.py  GTK 设置窗口
   setup_wizard.py     `vibevibe setup`
   i18n.py             中英文案表
