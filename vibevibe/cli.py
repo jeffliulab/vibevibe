@@ -35,6 +35,14 @@ def _load(args: argparse.Namespace) -> Config:
     return load_config(Path(args.config) if args.config else None)
 
 
+def _pad(text: str, width: int) -> str:
+    """按**显示宽度**补空格。中文一个字占两列,直接 f"{s:<12}" 会排得歪歪扭扭。"""
+    import unicodedata
+
+    shown = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+    return text + " " * max(0, width - shown)
+
+
 def _print_response(resp: dict, as_json: bool) -> int:
     if as_json:
         print(json.dumps(resp, ensure_ascii=False, indent=2))
@@ -195,6 +203,49 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         else:
             problems += 1
             print(f"  ✗ {tool:<10} 没装 —— {why}。装: sudo apt install {tool}")
+
+    # xprop 是可选的:缺了只是挑不了粘贴键(终端里会粘不上),
+    # 听写本身照常工作 —— 所以不算 problem
+    window_tool = shutil.which(cfg.inject.window_tool)
+    if window_tool:
+        print(f"  ✓ {cfg.inject.window_tool:<10} {window_tool}")
+    else:
+        print(f"  · {cfg.inject.window_tool:<10} 没装 —— 查焦点窗口挑粘贴键用"
+              f"(可选)。缺了在终端里会粘不上,装: sudo apt install x11-utils")
+    print()
+
+    print("── 命令行入口 ──")
+    from .launchers import vibevibe_bin
+
+    on_path = shutil.which("vibevibe")
+    real = vibevibe_bin()
+    if on_path:
+        print(f"  ✓ vibevibe    {on_path}")
+        if Path(on_path).resolve() != Path(real).resolve():
+            print(f"  ! PATH 里那个不是当前这份代码,当前这份在 {real}")
+    else:
+        # 不算 problem:装在项目 venv 里本来就不在 PATH,听写照样能用。
+        # 但托盘的「退出」和文档都会叫你敲 vibevibe,所以必须提醒。
+        print("  · vibevibe    不在 PATH 里 —— 敲 `vibevibe xxx` 会 command not found")
+        print(f"    当前这份在  {real}")
+        print("    跑 `vibevibe setup` 可以把它链进 ~/.local/bin")
+    print()
+
+    print("── 启动登记点 ──")
+    from .launchers import scan as scan_launchers
+
+    for launcher in scan_launchers():
+        label = _pad(launcher.label, 16)
+        if launcher.alive is None:
+            print(f"  · {label} 没登记过")
+        elif launcher.alive:
+            print(f"  ✓ {label} {launcher.command}")
+        else:
+            problems += 1
+            print(f"  ✗ {label} 命令指向不存在的路径,这条通道是废的")
+            print(f"      登记在 {launcher.where}")
+            print(f"      命令   {launcher.command}")
+            print("      → 跑 `vibevibe setup` 重写成当前路径")
     print()
 
     print("── Python 依赖 ──")

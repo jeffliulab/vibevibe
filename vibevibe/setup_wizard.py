@@ -18,7 +18,6 @@ pip 只能装 Python 代码和 Python 依赖。剩下这些它管不了:
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -36,14 +35,17 @@ from .config import (
     is_source_checkout,
     load_config,
 )
-from .service import SERVICE as SERVICE_NAME
-
-# GNOME 自定义快捷键存放的 dconf 路径
-GNOME_KEYS_SCHEMA = "org.gnome.settings-daemon.plugins.media-keys"
-GNOME_CUSTOM_PATH = (
-    "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/vibevibe/"
+from .launchers import (
+    GNOME_CUSTOM_PATH,
+    GNOME_CUSTOM_SCHEMA,
+    GNOME_KEYS_SCHEMA,
+    autostart_path,
+    unit_path,
+    vibevibe_bin,
 )
-GNOME_CUSTOM_SCHEMA = f"{GNOME_KEYS_SCHEMA}.custom-keybinding:{GNOME_CUSTOM_PATH}"
+from .launchers import get as get_launcher
+from .launchers import stale_reason
+from .service import SERVICE as SERVICE_NAME
 
 
 # ── 小工具 ──────────────────────────────────────────────────────────────
@@ -76,20 +78,8 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
-def _vibevibe_bin() -> str:
-    """当前这个 vibevibe 命令的绝对路径,给快捷键和 systemd 用。
-
-    不能只写 "vibevibe" —— GNOME 快捷键和 systemd 的 PATH 跟你的终端不一样,
-    只写命令名很可能找不到。
-    """
-    exe = shutil.which("vibevibe")
-    if exe:
-        return exe
-    # venv 里 pip install -e . 装的,通常跟 python 在同一个 bin 下
-    candidate = Path(sys.executable).parent / "vibevibe"
-    if candidate.exists():
-        return str(candidate)
-    return f"{sys.executable} -m vibevibe.cli"
+# 这个函数搬进了 launchers.py(doctor 也要用),这里留个别名少改几十处调用
+_vibevibe_bin = vibevibe_bin
 
 
 # ── 各步骤 ──────────────────────────────────────────────────────────────
@@ -121,6 +111,57 @@ def step_python_deps() -> bool:
     return True
 
 
+def step_cli_entry(auto_yes: bool) -> bool:
+    """让 `vibevibe` 这个命令在终端里敲得出来。
+
+    正常 `pip install vibevibe` 的用户本来就在 PATH 上,这步直接跳过。
+    装在项目 venv 里(开发模式)才需要:venv 的 bin 不在 PATH,于是
+    托盘的「退出」提示、README、doctor 里所有 `vibevibe xxx` 都是空头支票 ——
+    尤其是退出之后想再开回来的时候,那是唯一的路。
+    """
+    real = _vibevibe_bin()
+    on_path = shutil.which("vibevibe")
+    if on_path:
+        _say(f"  ✓ vibevibe    {on_path}")
+        if Path(on_path).resolve() != Path(real).resolve():
+            _say(f"  ! 但 PATH 里那个不是当前这份代码,当前这份在 {real}")
+        return True
+
+    # 命令本身都算不出绝对路径(比如源码目录里直接跑),那就没什么可链的
+    if not Path(real.split()[0]).exists():
+        _say(f"  · 算不出可执行文件路径({real}),跳过")
+        return True
+
+    link_dir = Path.home() / ".local" / "bin"
+    target = link_dir / "vibevibe"
+    _say("  ✗ vibevibe 不在 PATH 里 —— 在终端敲 `vibevibe xxx` 会 command not found")
+    _say(f"    当前这份在 {real}")
+    _say()
+    _say(f"  建议做个软链接: {target} → {real}")
+    _say("  作用   托盘「退出」之后能用命令行把它开回来;文档里的命令也才对得上")
+    _say("  说明   ~/.local/bin 是用户级 PATH 的标准位置,不需要 root")
+    if not _ask("建这个软链接?", auto_yes):
+        _say("  · 跳过。那些命令请自己用绝对路径敲")
+        return True
+
+    try:
+        link_dir.mkdir(parents=True, exist_ok=True)
+        if target.exists() or target.is_symlink():
+            _say(f"  ! {target} 已存在,不覆盖。要换就自己先删掉它")
+            return True
+        target.symlink_to(real.split()[0])
+    except OSError as exc:
+        _say(f"  ✗ 建链接失败: {exc}")
+        return False
+
+    _say(f"  ✓ 已链接 {target}")
+    if not shutil.which("vibevibe"):
+        # 目录不在 PATH 上(不是 Ubuntu 默认那套 .profile),得说清楚
+        _say("  ! 但 ~/.local/bin 不在你的 PATH 里,加一句到 ~/.bashrc:")
+        _say('        export PATH="$HOME/.local/bin:$PATH"')
+    return True
+
+
 def step_system_tools(cfg: Config, auto_yes: bool) -> bool:
     """检查系统工具。缺了只打印命令,**绝不自己 sudo**。"""
     needed = {
@@ -135,6 +176,15 @@ def step_system_tools(cfg: Config, auto_yes: bool) -> bool:
         else:
             missing.append(tool)
             _say(f"  ✗ {tool:<10} 没装 —— {why}")
+
+    # xprop 是**可选**的:缺了只是挑不了粘贴键(终端里会粘不上),
+    # 听写本身照常工作,所以不进 missing、不拦流程
+    window_tool = shutil.which(cfg.inject.window_tool)
+    if window_tool:
+        _say(f"  ✓ {cfg.inject.window_tool:<10} {window_tool}")
+    else:
+        _say(f"  · {cfg.inject.window_tool:<10} 没装(可选)—— 查焦点窗口挑粘贴键用。")
+        _say("               缺了在终端里粘不上字。装: sudo apt install x11-utils")
 
     if not missing:
         return True
@@ -236,24 +286,43 @@ def step_hotkey(key: str, auto_yes: bool) -> bool:
         _say(f"        {_vibevibe_bin()} toggle")
         return True
 
+    command = f"{_vibevibe_bin()} toggle"
     ok, current = _run(["gsettings", "get", GNOME_KEYS_SCHEMA, "custom-keybindings"])
     if ok and GNOME_CUSTOM_PATH in current:
+        stale = stale_reason(get_launcher("shortcut"), command)
+        if stale is None:
+            ok2, bound = _run(["gsettings", "get", GNOME_CUSTOM_SCHEMA, "binding"])
+            _say(f"  · 快捷键已绑过: {bound.strip() if ok2 else '?'}")
+            _say("    想换键就先删掉再跑,或者直接在 GNOME 设置里改")
+            return True
+        # 绑过,但绑的那条命令已经指向不存在的地方 —— 项目目录改名 / 换 venv
+        # 都会这样。这时候报「已绑过」是骗人的:按下去什么都不会发生。
+        _say("  ! 快捷键绑的命令已失效,按了不会有反应")
+        _say(f"    旧: {stale}")
+        _say(f"    新: {command}")
+        if not _ask("把命令改成新路径?", auto_yes):
+            _say("  · 跳过。快捷键仍然是坏的")
+            return True
+        # **只改 command,不碰 binding** —— 用户可能早就把组合键换成了别的,
+        # 修一条死路径不该顺手把他挑的键位重置回默认值。
+        ok, out = _run(["gsettings", "set", GNOME_CUSTOM_SCHEMA, "command", command])
+        if not ok:
+            _say(f"  ✗ 设置失败: {out}")
+            return False
         ok2, bound = _run(["gsettings", "get", GNOME_CUSTOM_SCHEMA, "binding"])
-        _say(f"  · 快捷键已绑过: {bound.strip() if ok2 else '?'}")
-        _say("    想换键就先删掉再跑,或者直接在 GNOME 设置里改")
+        _say(f"  ✓ 已改好,键位保持不变: {bound.strip() if ok2 else '?'}")
         return True
-
-    command = f"{_vibevibe_bin()} toggle"
-    _say(f"  按键     {key}")
-    _say("  说明     应用程序基本不碰 Super 键(它是桌面环境的保留键),")
-    _say("           所以 Super 系组合最不容易撞车。Ctrl+Shift+V 看着顺手,")
-    _say("           但它在浏览器/VS Code/终端里都是「粘贴为纯文本」。")
-    _say(f"  执行     {command}")
-    _say("  手感     按一下开始录,再按一下停止并出字(GNOME 感知不到松手,")
-    _say("           所以是 toggle 而不是按住说话)")
-    if not _ask("绑定这个快捷键?", auto_yes):
-        _say("  · 跳过。可以自己在 GNOME 设置 → 键盘 → 自定义快捷键里加。")
-        return True
+    else:
+        _say(f"  按键     {key}")
+        _say("  说明     应用程序基本不碰 Super 键(它是桌面环境的保留键),")
+        _say("           所以 Super 系组合最不容易撞车。Ctrl+Shift+V 看着顺手,")
+        _say("           但它在浏览器/VS Code/终端里都是「粘贴为纯文本」。")
+        _say(f"  执行     {command}")
+        _say("  手感     按一下开始录,再按一下停止并出字(GNOME 感知不到松手,")
+        _say("           所以是 toggle 而不是按住说话)")
+        if not _ask("绑定这个快捷键?", auto_yes):
+            _say("  · 跳过。可以自己在 GNOME 设置 → 键盘 → 自定义快捷键里加。")
+            return True
 
     # 保留用户已有的其它自定义快捷键,只把自己这条追加进去
     existing = []
@@ -289,24 +358,34 @@ def step_service(auto_yes: bool) -> bool:
         _say(f"        {_vibevibe_bin()} daemon")
         return True
 
-    unit_dir = Path(
-        os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
-    ) / "systemd" / "user"
-    unit_path = unit_dir / SERVICE_NAME
-
-    if unit_path.exists():
-        ok, out = _run(["systemctl", "--user", "is-enabled", SERVICE_NAME])
-        _say(f"  · 服务已安装: {unit_path}({out.strip() or '状态未知'})")
-        return True
-
+    target = unit_path()
+    unit_dir = target.parent
     exec_start = f"{_vibevibe_bin()} daemon --quiet"
-    _say(f"  单元文件 {unit_path}")
-    _say(f"  启动命令 {exec_start}")
-    _say("  作用     开机自启、崩溃自动重启、跟任何终端会话解耦")
-    _say("  级别     --user,不需要 root,不动系统任何配置")
-    if not _ask("安装并启用?", auto_yes):
-        _say("  · 跳过。那守护进程得自己手动起: vibevibe daemon")
-        return True
+    rewriting = False
+
+    if target.exists():
+        stale = stale_reason(get_launcher("service"), exec_start)
+        if stale is None:
+            ok, out = _run(["systemctl", "--user", "is-enabled", SERVICE_NAME])
+            _say(f"  · 服务已安装: {target}({out.strip() or '状态未知'})")
+            return True
+        # 单元文件在,但 ExecStart 指着不存在的地方 —— 服务会在启动时
+        # 反复失败(status=203/EXEC),而"文件存不存在"这个判断照样报"已安装"。
+        _say("  ! 单元文件里的启动命令已失效,服务起不来")
+        _say(f"    旧: {stale}")
+        _say(f"    新: {exec_start}")
+        if not _ask("重写单元文件?", auto_yes):
+            _say("  · 跳过。服务仍然是坏的")
+            return True
+        rewriting = True
+    else:
+        _say(f"  单元文件 {target}")
+        _say(f"  启动命令 {exec_start}")
+        _say("  作用     开机自启、崩溃自动重启、跟任何终端会话解耦")
+        _say("  级别     --user,不需要 root,不动系统任何配置")
+        if not _ask("安装并启用?", auto_yes):
+            _say("  · 跳过。那守护进程得自己手动起: vibevibe daemon")
+            return True
 
     if not SERVICE_TEMPLATE.exists():
         _say(f"  ✗ 找不到服务模板: {SERVICE_TEMPLATE}")
@@ -318,13 +397,19 @@ def step_service(auto_yes: bool) -> bool:
     text = text.replace("@WORKING_DIR@", str(data_root()))
 
     unit_dir.mkdir(parents=True, exist_ok=True)
-    unit_path.write_text(text, encoding="utf-8")
-    _say(f"  ✓ 已写入 {unit_path}")
+    target.write_text(text, encoding="utf-8")
+    _say(f"  ✓ 已写入 {target}")
 
-    for args, desc in (
-        (["systemctl", "--user", "daemon-reload"], "重载 systemd"),
-        (["systemctl", "--user", "enable", "--now", SERVICE_NAME], "启用并启动"),
-    ):
+    # 改了单元文件必须 daemon-reload,否则 systemd 还按内存里那份旧的跑。
+    # 重写的情况下还要 restart —— 服务可能正带着旧的 ExecStart 活着。
+    steps = [(["systemctl", "--user", "daemon-reload"], "重载 systemd")]
+    if rewriting:
+        steps.append((["systemctl", "--user", "restart", SERVICE_NAME], "按新命令重启"))
+    else:
+        steps.append(
+            (["systemctl", "--user", "enable", "--now", SERVICE_NAME], "启用并启动"))
+
+    for args, desc in steps:
         ok, out = _run(args)
         if not ok:
             _say(f"  ✗ {desc}失败: {out}")
@@ -335,36 +420,6 @@ def step_service(auto_yes: bool) -> bool:
     _say("  查看状态: systemctl --user status vibevibe")
     _say("  看日志:   journalctl --user -u vibevibe -f")
     return True
-
-
-def _stale_autostart_exec(desktop: Path, want_exec: str) -> str | None:
-    """自启文件里的 Exec= 还指得到东西吗?指不到就把旧的那行还回来。
-
-    返回 None = 没问题(可以照旧跳过);返回字符串 = 那条已经失效的旧命令。
-
-    为什么需要这个:`.desktop` 里的 Exec= 是**绝对路径**(必须如此,自启时
-    的 PATH 跟终端不一样)。项目目录一改名、venv 一重建,这个文件就变成了
-    指向空气的死链接,而它还在那儿——只判断"文件存不存在"会一直报"已装",
-    托盘却再也起不来。这坑本机踩过一次:工作区从 8888-夏日大作战 改名成
-    8888-Projects 之后,自启文件在原地放了一整天没人发现。
-    """
-    try:
-        text = desktop.read_text(encoding="utf-8")
-    except OSError:
-        return "(读不出来)"
-
-    for line in text.splitlines():
-        if not line.startswith("Exec="):
-            continue
-        old = line[len("Exec="):].strip()
-        if old == want_exec:
-            return None
-        # 命令行不同不一定是坏的(用户可能自己加了参数),
-        # 但可执行文件本身不存在就一定是坏的
-        binary = old.split()[0] if old.split() else ""
-        return None if binary and Path(binary).exists() else (old or "(空)")
-
-    return "(没有 Exec= 这一行)"
 
 
 def step_tray(auto_yes: bool) -> bool:
@@ -395,16 +450,14 @@ def step_tray(auto_yes: bool) -> bool:
         _say("   ubuntu-appindicators,默认已启用)")
         return False
 
-    autostart = Path(
-        os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
-    ) / "autostart"
-    target = autostart / "vibevibe-tray.desktop"
+    target = autostart_path()
+    autostart = target.parent
 
     exec_cmd = f"{_vibevibe_bin()} tray"
     icon = str(ICONS_DIR / "vibevibe-idle.svg")
 
     if target.exists():
-        stale = _stale_autostart_exec(target, exec_cmd)
+        stale = stale_reason(get_launcher("tray_autostart"), exec_cmd)
         if stale is None:
             _say(f"  · 托盘自启已装: {target}")
             return True
@@ -473,7 +526,7 @@ def run_setup(
         _say()
         _say("  每一步都会先问你。需要 root 的事情我只打印命令,不会替你 sudo。")
 
-    total = 7
+    total = 8
     failures = []
 
     _step(1, total, "Python 依赖")
@@ -485,32 +538,36 @@ def run_setup(
     if not step_system_tools(load_config(), auto_yes):
         failures.append("系统工具(xdotool / xclip)")
 
-    _step(3, total, "配置文件")
+    _step(3, total, "命令行入口")
+    if not step_cli_entry(auto_yes):
+        failures.append("命令行入口")
+
+    _step(4, total, "配置文件")
     if not step_config(auto_yes):
         failures.append("配置文件")
 
     # 配置可能刚写好,重新读一遍再往下走
     cfg = load_config()
 
-    _step(4, total, "模型权重")
+    _step(5, total, "模型权重")
     if skip_weights:
         _say("  · 按参数要求跳过")
     elif not step_weights(cfg, auto_yes):
         failures.append("模型权重")
 
-    _step(5, total, "快捷键")
+    _step(6, total, "快捷键")
     if skip_hotkey:
         _say("  · 按参数要求跳过")
     elif not step_hotkey(key, auto_yes):
         failures.append("快捷键")
 
-    _step(6, total, "开机自启服务")
+    _step(7, total, "开机自启服务")
     if skip_service:
         _say("  · 按参数要求跳过")
     elif not step_service(auto_yes):
         failures.append("systemd 服务")
 
-    _step(7, total, "托盘图标")
+    _step(8, total, "托盘图标")
     if skip_tray:
         _say("  · 按参数要求跳过")
     elif not step_tray(auto_yes):

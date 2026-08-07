@@ -14,6 +14,12 @@
 - [ ] 长音频 VAD 切分接 silero-vad
 - [ ] 转写期间光标移动导致文字落到新位置 —— 已知行为,待定要不要修
 
+### 已完成(v0.2.2)
+
+- [x] 终端里粘不进字 —— 粘贴键按焦点窗口 WM_CLASS 挑,不再无条件发 ctrl+v
+- [x] 三处启动登记点(快捷键 / systemd unit / 托盘自启)统一收进 `launchers.py`,setup 自愈、doctor 能查
+- [x] doctor 加「命令行入口」一节：`vibevibe` 不在 PATH 时说清楚
+
 ### 已完成(v0.2.1)
 
 - [x] 托盘「退出 vibevibe(停止服务)」+ 命令行 `vibevibe quit` —— 之前根本没有整个退出的入口

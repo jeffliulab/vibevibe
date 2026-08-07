@@ -203,10 +203,17 @@ error_sec = 0.28
 
 
 [inject]
-# clipboard_paste:填剪贴板再模拟 Ctrl+V(推荐,中英混排最可靠)
+# clipboard_paste:填剪贴板再模拟一次粘贴(推荐,中英混排最可靠)
 # type:用 xdotool 逐字敲(中文不可靠,仅备选)
 method = "clipboard_paste"
+
+# 绝大多数程序的粘贴键。**终端不是**,见下面那张覆盖表。
 paste_key = "ctrl+v"
+
+# 查焦点窗口类名用的工具(Debian/Ubuntu 上在 x11-utils 包里)。
+# 没装或查不出来 → 安静退回上面那个 paste_key,听写照常工作,
+# 只是在终端里会粘不上。
+window_tool = "xprop"
 
 # 粘贴后把你原来的剪贴板内容还回去
 restore_clipboard = true
@@ -215,6 +222,38 @@ restore_delay_sec = 0.5
 clipboard_tool = "xclip"
 type_tool = "xdotool"
 type_delay_ms = 12
+
+# ── 按窗口覆盖粘贴键 ──────────────────────────────────────────────
+#
+# 为什么要有这张表:终端里 Ctrl+V **不是粘贴**。它落到 shell 的 readline
+# 手里是 quoted-insert(下一个字符按字面插入)——不但不出字,还会把你接下来
+# 敲的第一个键吃掉。所以对着终端听写必须换成那个终端自己的粘贴键。
+#
+# 下面的值是**各终端自己文档写明的默认粘贴键**,不是我们逐个实测的
+# (本项目只在 GNOME Terminal 上实测过)。你的终端改过键位就改这里。
+#
+# 怎么查窗口类名:跑 `xprop WM_CLASS`,鼠标变成十字后点一下那个窗口。
+# 输出形如 WM_CLASS(STRING) = "gnome-terminal-server", "Gnome-terminal",
+# 两个值哪个写进来都行(匹配时大小写不敏感)。
+#
+# ⚠️ 你在这里写了这一节 = **整张表替换**内置默认值,不是往上追加。
+#    只想加一个终端的话,把下面这些连同你要加的那条一起写全。
+#
+# 注意这一节必须放在 [inject] 的所有普通键**之后** —— TOML 的规矩:
+# 子表一开,上面那个表就关了,后面再写普通键会算到子表里去。
+[inject.paste_key_by_window_class]
+"gnome-terminal-server" = "ctrl+shift+v"
+"org.gnome.Ptyxis" = "ctrl+shift+v"
+"konsole" = "ctrl+shift+v"
+"xfce4-terminal" = "ctrl+shift+v"
+"tilix" = "ctrl+shift+v"
+"terminator" = "ctrl+shift+v"
+"alacritty" = "ctrl+shift+v"
+"kitty" = "ctrl+shift+v"
+"org.wezfurlong.wezterm" = "ctrl+shift+v"
+"foot" = "ctrl+shift+v"
+# xterm 没有 ctrl+shift+v,它的粘贴是 shift+insert
+"xterm" = "shift+insert"
 
 
 [shortcut]

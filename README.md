@@ -129,13 +129,14 @@ vibevibe setup
 `setup` handles everything pip cannot. It asks before each step, it is idempotent, and **it never runs `sudo` for you** — if a system package is missing it prints the command for you to run.
 
 ```
-[1/7] Python dependencies
-[2/7] System tools
-[3/7] Config file            ~/.config/vibevibe/config.toml
-[4/7] Model weights          ~4 GB
-[5/7] Desktop shortcut      default: Super+Shift+V
-[6/7] Autostart service      systemd --user
-[7/7] Tray icon
+[1/8] Python dependencies
+[2/8] System tools
+[3/8] Command-line entry     makes `vibevibe` runnable from your shell
+[4/8] Config file            ~/.config/vibevibe/config.toml
+[5/8] Model weights          ~4 GB
+[6/8] Desktop shortcut       default: Super+Shift+V
+[7/8] Autostart service      systemd --user
+[8/8] Tray icon
 ```
 
 Then press **Super+Shift+V**, say something, press it again. The text appears at your cursor.
@@ -286,6 +287,7 @@ vibevibe/
   sound.py            audio cues, synthesized — no asset files
   tray.py             system tray icon
   service.py          systemd user-service control, and "stop vibevibe entirely"
+  launchers.py        the three places that record a launch command; reads and liveness
   settings_dialog.py  GTK settings window
   setup_wizard.py     `vibevibe setup`
   i18n.py             English / Chinese strings
@@ -320,11 +322,35 @@ A two-backend comparison over 12 clips takes about a minute.
 <summary>Nothing happens when I press the key</summary>
 
 ```bash
+vibevibe doctor       # run this first — it checks whether the bound command still resolves
 vibevibe status
-systemctl --user status vibevibe
 ```
 
-If the daemon is healthy, the hotkey binding probably is not. Check GNOME Settings → Keyboard → Custom Shortcuts, or re-run `vibevibe setup`.
+**The most common cause is a hotkey bound to a dead path.** The shortcut, the systemd service and the tray autostart entry all record an **absolute path** (they must — their PATH is not your shell's), so renaming the project directory or rebuilding the venv turns them into dangling links. The "启动登记点 / launchers" section of `doctor` marks those ✗; re-running `vibevibe setup` rewrites them to the current path (it changes only the command, never the key combination you chose).
+
+</details>
+
+<details>
+<summary>Dictating into a terminal produces no text (Claude Code CLI, etc.)</summary>
+
+**`Ctrl+V` is not paste in a terminal.** It reaches the shell's readline as `quoted-insert` (insert the next character literally), so not only does no text appear — the next key you press gets swallowed. GNOME Terminal, konsole and friends paste with `Ctrl+Shift+V`; xterm uses `Shift+Insert`.
+
+Since 0.2.2 vibevibe **looks at the focused window before choosing which key to send**, and common terminals are in the built-in table. If yours still does not work:
+
+```bash
+xprop WM_CLASS          # the cursor becomes a cross — click the terminal window
+```
+
+Add the class name to `~/.config/vibevibe/config.toml`:
+
+```toml
+[inject.paste_key_by_window_class]
+"your-terminal-class" = "ctrl+shift+v"
+```
+
+⚠️ Writing this section **replaces the whole built-in table** rather than adding to it, so list the other terminals too — and it must come *after* every plain key of `[inject]` (a TOML rule).
+
+Without `xprop` (`sudo apt install x11-utils`) the window cannot be inspected and `ctrl+v` is always used — dictation still works everywhere except terminals.
 
 </details>
 
@@ -332,6 +358,16 @@ If the daemon is healthy, the hotkey binding probably is not. Check GNOME Settin
 <summary>Speech is recognized but no text appears</summary>
 
 `xdotool` or `xclip` is missing. `vibevibe doctor` will say so, and the daemon logs a warning at startup.
+If it only fails in a **terminal**, see the entry above.
+
+</details>
+
+<details>
+<summary>`vibevibe: command not found`</summary>
+
+When installed into a project venv (`pip install -e .`), `vibevibe` exists only in that venv's `bin/` and is not on your login shell's PATH. The "command line entry" section of `vibevibe doctor` tells you where it actually is.
+
+Run `vibevibe setup`; step 3 offers to symlink it into `~/.local/bin`. If you decline, use the absolute path.
 
 </details>
 

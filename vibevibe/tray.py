@@ -424,7 +424,12 @@ class Tray:
         只关托盘会留下一个还在占内存的守护进程,只停服务会留下一个
         指着空气的托盘图标。
         """
-        if not self._confirm(t("tray.quit_confirm_title"), t("tray.quit_confirm_body")):
+        from .launchers import vibevibe_bin
+
+        # 把**这台机器上真实可用**的命令填进去,而不是笼统的 "vibevibe tray" ——
+        # 装在项目 venv 里的时候后者压根不在 PATH 上
+        body = t("tray.quit_confirm_body") % f"{vibevibe_bin()} tray"
+        if not self._confirm(t("tray.quit_confirm_title"), body):
             return
 
         ok, notes = stop_all(self.cfg)

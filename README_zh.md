@@ -129,13 +129,14 @@ vibevibe setup
 `setup` 负责 pip 干不了的一切。每一步都先问你、可以重复跑不会搞坏东西，而且**绝不替你 `sudo`**——缺系统包时只把命令打出来让你自己跑。
 
 ```
-[1/7] Python 依赖
-[2/7] 系统工具
-[3/7] 配置文件            ~/.config/vibevibe/config.toml
-[4/7] 模型权重            约 4 GB
-[5/7] 桌面快捷键          默认 Super+Shift+V
-[6/7] 开机自启服务        systemd --user
-[7/7] 托盘图标
+[1/8] Python 依赖
+[2/8] 系统工具
+[3/8] 命令行入口          让 `vibevibe` 在终端里敲得出来
+[4/8] 配置文件            ~/.config/vibevibe/config.toml
+[5/8] 模型权重            约 4 GB
+[6/8] 桌面快捷键          默认 Super+Shift+V
+[7/8] 开机自启服务        systemd --user
+[8/8] 托盘图标
 ```
 
 然后按 **Super+Shift+V**，说话，再按一下，文字就出现在光标处。
@@ -283,6 +284,7 @@ vibevibe/
   sound.py            提示音，现算的正弦波，不依赖音频文件
   tray.py             系统托盘图标
   service.py          systemd 用户服务的操作，以及「把 vibevibe 整个停掉」
+  launchers.py        快捷键 / systemd / 自启三处登记的启动命令，读取与存活判断
   settings_dialog.py  GTK 设置窗口
   setup_wizard.py     `vibevibe setup`
   i18n.py             中英文案表
@@ -317,11 +319,35 @@ python bench/compare.py --label mine \
 <summary>按键没反应</summary>
 
 ```bash
+vibevibe doctor       # 先跑这个：它会检查快捷键绑的命令还指不指得到东西
 vibevibe status
-systemctl --user status vibevibe
 ```
 
-守护进程正常的话，多半是快捷键没绑上。去 GNOME 设置 → 键盘 → 自定义快捷键看看，或者重跑一次 `vibevibe setup`。
+**最常见的原因是快捷键绑的是一条死路径。** 快捷键、systemd 服务、托盘自启这三处登记的都是**绝对路径**（必须如此——它们的 PATH 跟你的终端不一样），所以项目目录一改名、venv 一重建，它们就变成了指向空气的死链接。`doctor` 的「启动登记点」那一节会把这种情况标成 ✗，重跑一次 `vibevibe setup` 就会改回当前路径（只改命令，不动你自己挑的键位）。
+
+</details>
+
+<details>
+<summary>对着终端说话不出字（Claude Code CLI 等）</summary>
+
+**终端里 `Ctrl+V` 不是粘贴。** 它落到 shell 的 readline 手里是 `quoted-insert`（下一个字符按字面插入），所以不但不出字，还会把你接下来敲的第一个键吃掉。GNOME Terminal / konsole 这些的粘贴是 `Ctrl+Shift+V`，xterm 是 `Shift+Insert`。
+
+vibevibe 0.2.2 起会**先看焦点窗口是谁再决定发哪个键**，常见终端已经在内置表里。如果你的终端还是不行：
+
+```bash
+xprop WM_CLASS          # 鼠标变十字后点一下那个终端窗口
+```
+
+把输出里的类名加进 `~/.config/vibevibe/config.toml`：
+
+```toml
+[inject.paste_key_by_window_class]
+"你的终端类名" = "ctrl+shift+v"
+```
+
+⚠️ 写了这一节就是**整张表替换**内置默认值，要把其它终端一起写全；而且这一节必须放在 `[inject]` 所有普通键**之后**（TOML 的规矩）。
+
+没装 `xprop`（`sudo apt install x11-utils`）的话查不了窗口，会一律退回 `ctrl+v` —— 听写照常能用，只是终端里粘不上。
 
 </details>
 
@@ -329,6 +355,16 @@ systemctl --user status vibevibe
 <summary>识别出来了但文字没出现</summary>
 
 缺 `xdotool` 或 `xclip`。`vibevibe doctor` 会告诉你，守护进程启动时也会打警告。
+如果只在**终端**里不出现，看上面那条。
+
+</details>
+
+<details>
+<summary>敲 vibevibe 提示 command not found</summary>
+
+装在项目 venv 里的时候（`pip install -e .`），`vibevibe` 只存在于那个 venv 的 `bin/` 下，不在你登录 shell 的 PATH 里。`vibevibe doctor` 的「命令行入口」一节会告诉你它到底在哪。
+
+跑一次 `vibevibe setup`，第 3 步会问要不要在 `~/.local/bin` 建个软链接；不想建就用绝对路径敲。
 
 </details>
 

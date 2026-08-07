@@ -180,14 +180,16 @@ MESSAGES: dict[str, dict[str, str]] = {
     "tray.quit": _m("退出托盘(服务继续运行)", "Quit tray (service keeps running)"),
     "tray.quit_all": _m("退出 vibevibe(停止服务)", "Quit vibevibe (stop service)"),
     "tray.quit_confirm_title": _m("退出 vibevibe?", "Quit vibevibe?"),
+    # %s = 这台机器上真实可用的那条启动命令。不能写死成 "vibevibe tray" ——
+    # 装在项目 venv 里的时候它根本不在 PATH 上,那条指引会把人带进死胡同。
     "tray.quit_confirm_body": _m(
         "守护进程会被停掉,内存全部还给系统;托盘图标也会消失,"
         "听写快捷键随之失效。\n\n"
-        "下次登录会自动回来。想现在就开回来,运行:vibevibe tray",
+        "下次登录会自动回来。想现在就开回来,运行:\n%s",
         "The daemon will be stopped and all its memory returned to the system. "
         "The tray icon disappears and dictation stops working.\n\n"
         "It comes back automatically at your next login. To bring it back now, "
-        "run: vibevibe tray"),
+        "run:\n%s"),
     "tray.quit_failed": _m("守护进程没能停干净", "The daemon did not stop cleanly"),
     "tray.settings_failed": _m("打不开设置窗口", "Cannot open Settings"),
     "tray.stale_hint": _m(

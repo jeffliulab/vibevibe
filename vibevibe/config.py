@@ -266,7 +266,38 @@ class InjectConfig:
     # clipboard_paste:填剪贴板再模拟粘贴(推荐,中英混排最可靠)
     # type:用 xdotool 逐字敲(中文容易出问题,仅作备选)
     method: str = "clipboard_paste"
+    # 绝大多数程序的粘贴键。终端不是,见下面那张覆盖表。
     paste_key: str = "ctrl+v"
+
+    # 按焦点窗口的 WM_CLASS 覆盖粘贴键。
+    #
+    # 为什么需要:终端里 ctrl+v **不是粘贴** —— 它落到 shell 的 readline 手里
+    # 是 quoted-insert(下一个字符按字面插入),不但粘不上,还会吃掉你接下来敲的
+    # 第一个键。所以对着终端听写必须换成那个终端自己的粘贴键。
+    #
+    # 表里的值是各终端**自己文档写明的默认粘贴键**,不是我们逐个实测的
+    # (本项目只在 GNOME Terminal 上实测过)。你的终端改过键位就自己改这里。
+    # 查窗口类名: xprop WM_CLASS 然后点那个窗口。
+    #
+    # ⚠️ 在配置文件里写这张表 = **整张替换**下面这些默认值,不是往上追加。
+    paste_key_by_window_class: dict[str, str] = field(default_factory=lambda: {
+        "gnome-terminal-server": "ctrl+shift+v",
+        "org.gnome.Ptyxis": "ctrl+shift+v",
+        "konsole": "ctrl+shift+v",
+        "xfce4-terminal": "ctrl+shift+v",
+        "tilix": "ctrl+shift+v",
+        "terminator": "ctrl+shift+v",
+        "alacritty": "ctrl+shift+v",
+        "kitty": "ctrl+shift+v",
+        "org.wezfurlong.wezterm": "ctrl+shift+v",
+        "foot": "ctrl+shift+v",
+        # xterm 没有 ctrl+shift+v,它的粘贴是 shift+insert
+        "xterm": "shift+insert",
+    })
+    # 查焦点窗口类名用的工具(x11-utils 里的 xprop)。
+    # 没装 / 查不出来 → 安静退回上面那个 paste_key,听写照常工作。
+    window_tool: str = "xprop"
+
     # 粘贴后是否恢复你原来的剪贴板内容
     restore_clipboard: bool = True
     restore_delay_sec: float = 0.5
